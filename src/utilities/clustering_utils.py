@@ -1,3 +1,14 @@
+"""
+Clustering utilities for protein binding site prediction.
+
+Provides functions for clustering surface points, managing protein structures,
+and propagating cluster labels from atoms to residues.
+
+Key parameters:
+- POINTS_DENSITY_PER_ATOM: Number of surface points generated per atom (~50)
+- PROBE_RADIUS: Solvent probe radius for SASA calculation (~1.6 Å)
+- aal_prot: Set of standard protein residue names
+"""
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,16 +29,30 @@ PROBE_RADIUS = 1.6
 def execute_atom_clustering(pdb_id, chain_id, predictions, probabilities, eps=10):
     """
     Execute atom-level clustering based on predicted binding residues.
+
+    Process:
+    1. Map residue numbering from zero-based (predictions) to auth (PDB) numbering
+    2. Extract 3D surface points from binding residues
+    3. Apply MeanShift clustering to surface points
+    4. Propagate cluster labels to atoms via majority voting
+    5. Propagate atom labels to residues via majority voting
+
     Args:
-        pdb_id: PDB identifier of the protein.
-        chain_id: Chain identifier of the protein.
-        predictions: List of predicted binding residue IDs (mmCIF numbering).
-        probabilities: List of probabilities/scores for the predicted binding residues.
+        pdb_id (str): PDB identifier
+        chain_id (str): Chain identifier
+        predictions (np.array): Zero-based residue indices marked as binding sites
+        probabilities (np.array): Binding probability scores for each residue
+        eps (float): MeanShift bandwidth parameter in Angstroms (default: 10)
+
     Returns:
-        clusters: Dict {cluster_id: [atom_id, ...], ...}
-        cluster_residues: List of Lists [[residue_id, ...], ...] for each cluster. The ordering corresponds to cluster IDs.
-        cluster_scores: List of average scores for each cluster. List has size of N, where N is number of clusters, and the ordering corresponds to cluster IDs.
-        atom_coords: Dict {atom_id: np.array([x,y,z])}
+        Tuple containing:
+        - clusters (dict): {cluster_id: [atom_serial_numbers,...]}
+        - cluster_residues (list): [cluster_id] -> [residue_ids,...]
+        - cluster_scores (list): Average binding score per cluster
+        - atom_coords (dict): {atom_id: np.array([x,y,z])}
+        - residue_coords (dict): {residue_id: np.array([x,y,z])}
+
+    Returns (None, None, None, None, None) if no surface points found.
     """
     # 1. Map mmCIF numbering to auth numbering
     auth_predictions, scores = cryptoshow_utils.map_mmcif_numbering_to_auth(pdb_id, chain_id, predictions, binding_scores=probabilities)
@@ -38,10 +63,10 @@ def execute_atom_clustering(pdb_id, chain_id, predictions, probabilities, eps=10
     if all_points.shape[0] == 0:
         return None, None, None, None, None
 
-    # 3. Cluster surface points and propagate labels to atoms    
+    # 3. Cluster surface points and propagate labels to atoms
     atom_labels = cluster_atoms_by_surface(
         all_points, map_point_to_atom, eps=eps)
-    
+
     # get cluster dictionary {cluster_id: [atom_id, ...], ...}
     clusters = {}
     for atom_index, cluster_label in atom_labels.items():
@@ -53,21 +78,21 @@ def execute_atom_clustering(pdb_id, chain_id, predictions, probabilities, eps=10
     cluster_scores = [[] for _ in range(max(clusters) + 1)]
     cluster_residues = [[] for _ in range(max(clusters) + 1)]
     auth_predictions = np.array(auth_predictions)
-    
+
     # 4.1 For each atom in each cluster, get its residue and score
     for atom_id, cluster_label in atom_labels.items():
         residue_id = map_atoms_to_residue_id[atom_id] # this is auth residue id
         score = scores[np.where(auth_predictions == int(residue_id))[0][0]]
         cluster_scores[cluster_label].append(score)
         cluster_residues[cluster_label].append(residue_id)
-    
+
     # 4.2 Vote
     residue_voting = {residue: [0 for _ in range(len(cluster_residues))] for residue in auth_predictions}
     for i, labels in enumerate(cluster_residues):
         counts = Counter(labels)
         for residue, number_of_occurences in counts.items():
             residue_voting[residue][i] = number_of_occurences
-    
+
     residue_clusters = {i: [] for i in range(len(cluster_residues))}
     # 4.3 get residue cluster assignment based on voting
     for residue, votes in residue_voting.items():
@@ -87,24 +112,28 @@ def execute_atom_clustering(pdb_id, chain_id, predictions, probabilities, eps=10
 
 def cluster_atoms_by_surface(all_points, point_to_atom_map, eps=1.5, gmm=False):
     """
-    Clusters surface points and propagates labels to atoms via majority vote.
-    
+    Cluster surface points using MeanShift or Gaussian Mixture Model.
+
+    Process:
+    1. Apply clustering algorithm to 3D surface points
+    2. Use majority voting to assign each atom a cluster label
+    3. Return atom ID -> cluster label mapping
+
     Args:
-        surface_points_dict: Dict {atom_id: np.array([[x,y,z], ...])}
-        eps: DBSCAN maximum distance between two samples (in Angstroms).
-        min_samples: DBSCAN minimum samples in a neighborhood for a core point.
-        
+        all_points (np.array): (N, 3) array of 3D surface point coordinates
+        point_to_atom_map (np.array): (N,) array mapping each point to atom serial number
+        eps (float): MeanShift bandwidth or DBSCAN epsilon in Angstroms (default: 1.5)
+        gmm (bool): Use Gaussian Mixture Model instead of MeanShift
+
     Returns:
-        atom_labels: Dict {atom_id: cluster_label_int}
-        point_labels: Array of labels for the flattened points (for visualization)
-        all_points: Array of coordinates (for visualization)
+        atom_labels (dict): {atom_id: cluster_label} mapping each atom to cluster
     """
-    
+
     if not gmm:
         # n_jobs=-1 uses all CPU cores.
         # clustering = AffinityPropagation(damping=0.9, preference=-200, max_iter=500, convergence_iter=50)
         clustering = MeanShift(bandwidth=eps, bin_seeding=True, n_jobs=-1) # eps = 9 or 12
-        # clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=eps, linkage='ward') 
+        # clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=eps, linkage='ward')
         # clustering = DBSCAN(eps=eps, min_samples=5)
         # clustering = DBSCAN(eps=6, min_samples=1)
 
@@ -114,7 +143,7 @@ def cluster_atoms_by_surface(all_points, point_to_atom_map, eps=1.5, gmm=False):
     if gmm:
         # get the optimal number of components
         bgmm = BayesianGaussianMixture(
-            n_components=max(len(all_points), 1) - 1, 
+            n_components=max(len(all_points), 1) - 1,
             random_state=42,
             covariance_type='spherical',
         )
@@ -123,26 +152,26 @@ def cluster_atoms_by_surface(all_points, point_to_atom_map, eps=1.5, gmm=False):
 
         active_clusters = sum(bgmm.weights_ > 0.1) # Check how many clusters are actually used - how many are composed of >10% of points
         clustering = BayesianGaussianMixture(
-            n_components=max(active_clusters, 1), 
+            n_components=max(active_clusters, 1),
             random_state=42,
             covariance_type='spherical',
         )
 
         point_labels = clustering.fit_predict(all_points)
-    
+
     # Majority Vote (Propagate to Atoms)
     atom_labels = {}
-    
+
     # Get unique atom IDs present in the data
     unique_atoms = np.unique(point_to_atom_map)
-    
+
     for atom_id in unique_atoms:
         # 1. Find indices in the master array belonging to this atom
         indices = np.where(point_to_atom_map == atom_id)[0]
-        
+
         # 2. Extract the cluster labels for these points
         current_labels = point_labels[indices]
-        
+
         # 3. Determine the most common label (majority vote)
         counts = Counter(current_labels)
         majority_label = counts.most_common(1)[0][0]
@@ -151,19 +180,48 @@ def cluster_atoms_by_surface(all_points, point_to_atom_map, eps=1.5, gmm=False):
     return atom_labels
 
 aal_prot = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", 
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
     "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
     "ASH", "GLH", "HIE", "HID", "HIP", "LYN", "CYX", "CYM", "TYM"
 }
-# Keeps only standard protein residues in the structure
+
 def keep_only_standard_residues(structure):
-    """Keep only standard protein residues in the structure."""
+    """
+    Remove non-standard residues from protein structure.
+
+    Keeps only standard 20 amino acids plus common protonation variants.
+    Removes water, ligands, ions, and other non-protein residues.
+
+    Args:
+        structure (PDB.Structure or PDB.Chain): Biopython structure
+
+    Returns:
+        PDB.Structure or PDB.Chain: Modified structure (in-place modification)
+    """
     for residue in list(structure):
         if residue.get_resname() not in aal_prot:
             structure.detach_child(residue.id)
     return structure
 
 def get_protein_surface_points(pdb_id, chain_id, predicted_binding_sites):
+    """
+    Extract 3D surface points from predicted binding site residues.
+
+    For each residue, retrieve pre-computed surface points from atom.sasa_points.
+
+    Args:
+        pdb_id (str): PDB identifier
+        chain_id (str): Chain identifier
+        predicted_binding_sites (list): List of residue IDs marked as binding sites
+
+    Returns:
+        Tuple containing:
+        - surface_points (np.array): (N, 3) array of 3D coordinates
+        - map_surface_points_to_atom_id (np.array): (N,) mapping each point to atom serial number
+        - map_atoms_to_residue_id (dict): atom_id -> residue_id
+        - atom_coords (dict): atom_id -> coordinate vector
+        - residue_coords (dict): residue_id -> coordinate vector
+    """
     p = MMCIFParser(QUIET=1)
     struct = p.get_structure("protein", f"{CIF_FILES}/{pdb_id}.cif")
     struct = struct[0][chain_id]
@@ -181,17 +239,17 @@ def get_protein_surface_points(pdb_id, chain_id, predicted_binding_sites):
     for residue in struct.get_residues():
         # consider only residues from predicted binding sites
         residue_id = residue.get_id()[1]
-        
+
         if 'CA' in residue:
             residue_coords[residue_id] = residue['CA'].get_vector()
         else:
             # if no CA atom, use the first atom's coordinates
             first_atom = next(residue.get_atoms())
             residue_coords[residue_id] = first_atom.get_vector()
-        
+
         if residue.get_id()[1] not in predicted_binding_sites:
             continue
-        
+
         # get surface points for each atom in the residue
         for atom in residue.get_atoms():
             atom_id = atom.get_serial_number()

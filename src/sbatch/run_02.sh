@@ -10,6 +10,6 @@
 #SBATCH --mail-user=lopatkao@natur.cuni.cz # send email when job changes state to email address user@example.com
 #SBATCH --exclusive                     # Use whole node
 
-cd /home/lopatkao/esm2-generator/git/
+cd /home/lopatkao/bachelor/git/
 source /home/lopatkao/esm-env312/bin/activate
 python3 src/scripts/02_predict_residues.py

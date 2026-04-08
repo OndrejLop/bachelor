@@ -1,3 +1,23 @@
+"""
+Run ESM2 3B model predictions on protein sequences.
+
+This script:
+1. Loads a fine-tuned ESM2 3B model from data/models/3B-model.pt
+2. Processes FASTA files from data/intermediate/fastas/
+3. Generates predictions for binding residues using a multi-task model
+4. Saves predictions to data/intermediate/predictions/ (CSV format)
+5. Saves per-residue embeddings to data/intermediate/embeddings/ (NPY format)
+
+The model outputs four tensors:
+- Binding probability (via classifier head)
+- pLDDT score (via plDDT regressor)
+- Distance score (via distance regressor)
+- Token embeddings (1024-dim representations)
+
+Input: FASTA files with protein sequences (max 1024 residues)
+Output: CSV files with binding probabilities (one per sequence)
+        NPY files with ESM2 embeddings (one per sequence)
+"""
 from transformers import AutoTokenizer
 import torch
 import numpy as np
@@ -17,6 +37,19 @@ DROPOUT = 0.3
 OUTPUT_SIZE = 1
 
 class MultitaskFinetunedEsmModel(nn.Module):
+    """
+    Multi-task ESM2 fine-tuned model for protein binding site prediction.
+
+    The model uses ESM2 3B pre-trained embeddings and applies three task-specific
+    linear heads for predicting binding sites, pLDDT scores, and distance values.
+
+    Attributes:
+        llm: ESM2 3B pre-trained model
+        dropout: Dropout layer (p=0.3)
+        classifier: Linear head for binding site prediction (1 output)
+        plDDT_regressor: Linear head for pLDDT score prediction (1 output)
+        distance_regressor: Linear head for distance prediction (1 output)
+    """
     def __init__(self, esm_model: str) -> None:
         super().__init__()
         self.llm = EsmModel.from_pretrained(esm_model)
@@ -26,6 +59,15 @@ class MultitaskFinetunedEsmModel(nn.Module):
         self.distance_regressor = nn.Linear(self.llm.config.hidden_size, OUTPUT_SIZE)
 
     def forward(self, batch: dict[str, np.ndarray]) -> torch.Tensor:
+        """
+        Forward pass through the model.
+
+        Args:
+            batch (dict): Dictionary with 'input_ids' and 'attention_mask' tensors
+
+        Returns:
+            Tuple[torch.Tensor]: (binding_predictions, pLDDT_predictions, distance_predictions, embeddings)
+        """
         input_ids, attention_mask = batch["input_ids"], batch["attention_mask"]
         token_embeddings = self.llm(
             input_ids=input_ids, attention_mask=attention_mask

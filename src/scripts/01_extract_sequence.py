@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+Extract sequences from PDB files.
+
+This script reads PDB files from data/input/pdb/ and extracts protein sequences
+for each chain. Outputs FASTA files to data/intermediate/fastas/.
+
+Standard residues are converted to 1-letter codes. Non-standard residues are
+marked with 'X'. Water molecules and ligands are excluded.
+"""
 import argparse
 import os
 import sys
@@ -50,10 +59,10 @@ def extract_sequence(pdb_file):
         print(f"Error processing {pdb_file}: {e}", file=sys.stderr)
 
 def main():
-    # Hledej PDB soubory v aktuálním adresáři, nebo tam kde chceš hledat
+    """Main entry point. Searches for PDB files and extracts sequences."""
     pdb_files = []
-    
-    # Hledej v aktuálním adresáři
+
+    # Search for PDB files with .ent and .pdb extensions
     pdb_files.extend(glob.glob(os.path.join(source_dir, '*.ent')))
     pdb_files.extend(glob.glob(os.path.join(source_dir, '*.pdb')))
     

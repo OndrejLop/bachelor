@@ -1,26 +1,92 @@
+"""
+Cluster predicted binding sites and apply smoothing.
+
+This script:
+1. Reads ESM2 predictions and embeddings from intermediate files
+2. Applies a smoothing model to expand binding site predictions based on
+   surrounding residues within distance threshold
+3. Clusters predicted residues into distinct binding pockets using 3D surface
+   points and MeanShift clustering
+4. Generates cluster assignments with atom and residue mappings
+5. Saves pocket predictions and residue-level binding probabilities
+
+The smoothing model uses residue embeddings and local context to identify
+residues that should be reclassified as binding sites if they're close to
+predicted binding residues.
+
+Input:
+  - Predictions: CSV files (one float per residue)
+  - Embeddings: NPY files (1024-dim per residue)
+  - PDB files: 3D structure coordinates
+
+Output:
+  - {pdb_id}_predictions.csv: Pocket definitions with residue and atom lists
+  - {pdb_id}_residues.csv: Per-residue binding probabilities and pocket assignments
+"""
 from collections import Counter
 import numpy as np
 import sys
 import torch
 from pathlib import Path
+import argparse
+from datetime import datetime
+import json
 
 ROOT       = Path(__file__).parent.parent.parent
 
 sys.path.append(str(ROOT / 'src' / 'utilities'))
 import clustering_utils
-import cryptoshow_utils
 import eval_utils
 from eval_utils import CryptoBenchClassifier
 
-POSITIVE_DISTANCE_THRESHOLD = 10
-DECISION_THRESHOLD = 0.7
+parser = argparse.ArgumentParser(description="Cluster predicted binding sites with smoothing")
+parser.add_argument("--decision-threshold", type=float, default=0.7,
+                    help="Binding probability threshold (default: 0.7)")
+parser.add_argument("--distance-threshold", type=float, default=10,
+                    help="Spatial distance for neighbor search in Angstroms (default: 10)")
+parser.add_argument("--timestamp", action="store_true",
+                    help="Add timestamp to output directory (prevents overwrites)")
+args = parser.parse_args()
+
+POSITIVE_DISTANCE_THRESHOLD = args.distance_threshold
+DECISION_THRESHOLD = args.decision_threshold
 
 PREDICTIONS_DIR = ROOT / 'data' / 'intermediate' / 'predictions'
 EMBEDDINGS_DIR  = ROOT / 'data' / 'intermediate' / 'embeddings'
 PDB_DIR         = ROOT / 'data' / 'input' / 'pdb'
-OUTPUT_DIR      = ROOT / 'data' / 'output' / 'CS_predictions'
+base_output_dir = ROOT / 'data' / 'output' / 'CS_predictions'
 MODEL_PATH      = ROOT / 'data' / 'models' / '3B-model.pt'
 SMOOTHING_MODEL_PATH = ROOT / 'data' / 'models' / 'smoother.pt'
+
+# --- Create output directory with optional timestamp ---
+if args.timestamp:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    param_suffix = f"decision{args.decision_threshold}_dist{args.distance_threshold}"
+    OUTPUT_DIR = base_output_dir / f"{timestamp}_{param_suffix}"
+else:
+    OUTPUT_DIR = base_output_dir
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- Save run metadata ---
+run_metadata = {
+    "timestamp": datetime.now().isoformat(),
+    "decision_threshold": args.decision_threshold,
+    "distance_threshold": args.distance_threshold,
+    "output_dir": str(OUTPUT_DIR),
+}
+metadata_path = OUTPUT_DIR / "run_metadata.json"
+with open(metadata_path, 'w') as f:
+    json.dump(run_metadata, f, indent=2)
+
+print(f"\n{'='*60}")
+print(f"Pocket Clustering Run Parameters:")
+print(f"{'='*60}")
+print(f"Decision threshold:   {args.decision_threshold}")
+print(f"Distance threshold:   {args.distance_threshold} Å")
+print(f"Output directory:     {OUTPUT_DIR}")
+print(f"Metadata saved:       {metadata_path}")
+print(f"{'='*60}\n")
 
 
 def map_residue_numbering_to_auth(pdb_path: str, binding_residues: dict[np.ndarray], binding_scores: dict[np.ndarray]) -> dict[list[int]]:
@@ -73,6 +139,27 @@ def keep_only_standard_residues(structure):
     return structure
 
 def _attach_sasa_points(struct, n_points, probe_radius):
+    """
+    Attach 3D surface points to each atom for later clustering.
+
+    Uses a Fibonacci lattice sphere around each atom, filtered to only include
+    points that are exposed (not inside neighboring atoms).
+
+    Algorithm:
+    1. Generate n_points points on a unit sphere using Fibonacci lattice distribution
+    2. For each atom: scale points by van der Waals radius + probe radius
+    3. Use KDTree to find neighboring atoms within interaction distance
+    4. For each neighboring atom, remove points that fall inside it
+    5. Store exposed points in atom.sasa_points
+
+    Args:
+        struct (PDB.Structure): Biopython structure
+        n_points (int): Number of surface points per atom (~50)
+        probe_radius (float): Solvent probe radius in Angstroms (~1.6)
+
+    Side effect:
+        Sets atom.sasa_points attribute containing numpy array of exposed 3D coordinates
+    """
     from scipy.spatial import KDTree
     vdw_radii = {'C': 1.7, 'N': 1.55, 'O': 1.52, 'S': 1.8, 'P': 1.8,
                  'H': 1.2, 'SE': 1.9, 'FE': 1.4, 'ZN': 1.39, 'MG': 1.73}
@@ -102,6 +189,26 @@ def _attach_sasa_points(struct, n_points, probe_radius):
             atom.sasa_points = center.reshape(1, 3)
 
 def get_protein_surface_points(pdb_path, predicted_binding_sites):
+    """
+    Extract 3D surface points from predicted binding site residues.
+
+    For each atom in predicted binding residues, collects the pre-computed
+    SASA surface points (from _attach_sasa_points).
+
+    Args:
+        pdb_path (str): Path to PDB file
+        predicted_binding_sites (dict[str, list]): Chain ID -> list of binding residue IDs
+
+    Returns:
+        Tuple containing:
+        - surface_points (np.array): (N, 3) array of 3D coordinates
+        - map_surface_points_to_atom_id (np.array): (N,) array mapping each point to atom serial number
+        - map_atoms_to_residue_id (dict): atom_id -> (chain_id, residue_id)
+        - atom_coords (dict): atom_id -> coordinate vector
+        - residue_coords (dict): (chain_id, residue_id) -> coordinate vector
+
+    Returns empty array if no surface points found.
+    """
     from Bio.PDB import PDBParser
     from Bio.PDB.SASA import ShrakeRupley
 

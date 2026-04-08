@@ -7,6 +7,6 @@
 #SBATCH --time=01:00:00
 #SBATCH --mem=4G
 
-cd /home/lopatkao/esm2-generator/git/
+cd /home/lopatkao/bachelor/git/
 source /home/lopatkao/esm-env312/bin/activate
 python3 src/scripts/01_extract_sequence.py
