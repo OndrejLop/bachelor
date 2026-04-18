@@ -25,6 +25,7 @@ Output:
 """
 from collections import Counter
 import numpy as np
+import os
 import sys
 import torch
 from pathlib import Path
@@ -65,8 +66,9 @@ SMOOTHING_MODEL_PATH = ROOT / 'data' / 'models' / 'smoother.pt'
 # --- Create output directory with optional timestamp ---
 if args.timestamp:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
     param_suffix = f"decision{args.decision_threshold}_dist{args.distance_threshold}"
-    OUTPUT_DIR = base_output_dir / f"{timestamp}_{param_suffix}"
+    OUTPUT_DIR = base_output_dir / f"{timestamp}_{unique_id}_{param_suffix}"
 else:
     OUTPUT_DIR = base_output_dir
 
