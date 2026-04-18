@@ -107,7 +107,7 @@ def predict_long_sequence(sequence, tokenizer, model, device):
 
     DECISION SWITCH based on sequence length:
     - If ≤1024 residues: Predict once with full context
-    - If >1024 residues: Use sliding window approach (1024 windows, 100 stride)
+    - If >1024 residues: Use sliding window approach (1024 positions long windows, 100 stride)
 
     Args:
         sequence (str): Protein sequence (any length)
@@ -232,11 +232,6 @@ for fasta_file in fasta_files:
     for record in SeqIO.parse(fasta_file, "fasta"):
         sequence = str(record.seq)
 
-        if len(sequence) <= MAX_LENGTH:
-            print(f"  WARNING: Sequence is {len(sequence)} residues (≤1024). Use 02_predict_residues.py instead.")
-            continue
-
-        # Predict using sliding window
         preds, embeddings = predict_long_sequence(sequence, tokenizer, finetuned_model, device)
 
         # Build output filename
