@@ -9,8 +9,8 @@ This script analyzes outputs from previous pipeline steps:
 
 Input:
   - P2Rank predictions:    data/input/P2Rank/{pdb_id}_predictions.csv
-  - CryptoSite predictions: data/output/CS_predictions/{pdb_id}_predictions.csv
-  - Comparison results:    data/output/results/novel_cs_pockets.csv
+  - Seq2Pocket predictions: data/output/Seq2Pockets/{pdb_id}_predictions.csv
+  - Comparison results:    data/output/results/novel_s2p_pockets.csv
                            data/output/results/p2r_unique_pockets.csv
   - Clustering skip log:   data/output/CS_predictions/skipped_clustering.txt (optional)
 
@@ -29,7 +29,8 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).parent.parent.parent.parent
 
 P2RANK_DIR     = ROOT / 'data' / 'input' / 'P2Rank'
-CS_DIR         = ROOT / 'data' / 'output' / 'CS_predictions'
+S2P_DIR        = ROOT / 'data' / 'output' / 'Seq2Pockets'
+CS_DIR         = ROOT / 'data' / 'output' / 'CS_predictions'  # legacy, used only for skipped_clustering.txt lookup
 RESULTS_DIR    = ROOT / 'data' / 'output' / 'results'
 PDB_DIR        = ROOT / 'data' / 'input' / 'pdb'
 FASTA_DIR      = ROOT / 'data' / 'intermediate' / 'fastas'
@@ -150,13 +151,13 @@ def pipeline_funnel(out):
     n_pdb = count_files(PDB_DIR, "*.pdb")
     n_fasta = count_files(FASTA_DIR, "*.fasta")
     n_predictions = count_files(PRED_DIR, "*_predictions.csv")
-    n_cs_pockets = count_files(CS_DIR, "*_predictions.csv")
+    n_s2p_pockets = count_files(S2P_DIR, "*_predictions.csv")
     n_p2r_pockets = count_files(P2RANK_DIR, "*_predictions.csv")
 
     out.write(f"  PDB files:                     {n_pdb}\n")
     out.write(f"  Extracted FASTA sequences:     {n_fasta}\n")
     out.write(f"  ESM2 predictions (chains):     {n_predictions}\n")
-    out.write(f"  CryptoSite clustered (PDBs):   {n_cs_pockets}\n")
+    out.write(f"  Seq2Pocket clustered (PDBs):   {n_s2p_pockets}\n")
     out.write(f"  P2Rank predictions (PDBs):     {n_p2r_pockets}\n")
 
     # Try to read skipped_clustering.txt for attrition details
@@ -173,14 +174,14 @@ def pipeline_funnel(out):
         "n_pdb": n_pdb,
         "n_fasta": n_fasta,
         "n_predictions": n_predictions,
-        "n_cs_pockets": n_cs_pockets,
+        "n_s2p_pockets": n_s2p_pockets,
         "n_p2r_pockets": n_p2r_pockets,
     }
 
 def plot_funnel(funnel, out_path):
-    stages = ["PDB files", "FASTA seqs", "ESM2 preds\n(chains)", "CS pockets\n(PDBs)", "P2R pockets\n(PDBs)"]
+    stages = ["PDB files", "FASTA seqs", "ESM2 preds\n(chains)", "S2P pockets\n(PDBs)", "P2R pockets\n(PDBs)"]
     counts = [funnel["n_pdb"], funnel["n_fasta"], funnel["n_predictions"],
-              funnel["n_cs_pockets"], funnel["n_p2r_pockets"]]
+              funnel["n_s2p_pockets"], funnel["n_p2r_pockets"]]
 
     # Only plot stages that have data
     valid = [(s, c) for s, c in zip(stages, counts) if c > 0]
@@ -214,7 +215,7 @@ def per_method_stats(out):
 
     results = {}
     for method, directory, pattern in [
-        ("CryptoSite", CS_DIR, "*_predictions.csv"),
+        ("Seq2Pocket", S2P_DIR, "*_predictions.csv"),
         ("P2Rank", P2RANK_DIR, "*_predictions.csv"),
     ]:
         pockets_per_protein, pocket_sizes, pocket_scores = collect_pocket_stats(directory, pattern)
@@ -335,7 +336,7 @@ def novel_pocket_stats(out):
 
     results = {}
     for label, filename in [
-        ("CryptoSite-unique", "novel_cs_pockets.csv"),
+        ("Seq2Pocket-unique", "novel_s2p_pockets.csv"),
         ("P2Rank-unique", "novel_p2r_pockets.csv"),
     ]:
         csv_path = RESULTS_DIR / filename
@@ -421,41 +422,41 @@ def summary_table(funnel, method_stats, novel_stats, out):
     out.write("6. SUMMARY TABLE\n")
     out.write("=" * 60 + "\n\n")
 
-    header = f"{'Metric':<40} {'CryptoSite':>12} {'P2Rank':>12}"
+    header = f"{'Metric':<40} {'Seq2Pocket':>12} {'P2Rank':>12}"
     out.write(header + "\n")
     out.write("-" * len(header) + "\n")
 
-    def row(label, cs_val, p2r_val):
-        cs_str = str(cs_val) if cs_val is not None else "N/A"
+    def row(label, s2p_val, p2r_val):
+        s2p_str = str(s2p_val) if s2p_val is not None else "N/A"
         p2r_str = str(p2r_val) if p2r_val is not None else "N/A"
-        out.write(f"{label:<40} {cs_str:>12} {p2r_str:>12}\n")
+        out.write(f"{label:<40} {s2p_str:>12} {p2r_str:>12}\n")
 
-    cs = method_stats.get("CryptoSite")
+    s2p = method_stats.get("Seq2Pocket")
     p2r = method_stats.get("P2Rank")
 
     row("Proteins analyzed",
-        len(cs["pockets_per_protein"]) if cs else None,
+        len(s2p["pockets_per_protein"]) if s2p else None,
         len(p2r["pockets_per_protein"]) if p2r else None)
     row("Total pockets",
-        sum(cs["pockets_per_protein"]) if cs else None,
+        sum(s2p["pockets_per_protein"]) if s2p else None,
         sum(p2r["pockets_per_protein"]) if p2r else None)
     row("Mean pockets/protein",
-        f"{np.mean(cs['pockets_per_protein']):.2f}" if cs else None,
+        f"{np.mean(s2p['pockets_per_protein']):.2f}" if s2p else None,
         f"{np.mean(p2r['pockets_per_protein']):.2f}" if p2r else None)
     row("Median pocket size (residues)",
-        f"{np.median(cs['pocket_sizes']):.0f}" if cs else None,
+        f"{np.median(s2p['pocket_sizes']):.0f}" if s2p else None,
         f"{np.median(p2r['pocket_sizes']):.0f}" if p2r else None)
     row("Mean pocket size (residues)",
-        f"{np.mean(cs['pocket_sizes']):.2f}" if cs else None,
+        f"{np.mean(s2p['pocket_sizes']):.2f}" if s2p else None,
         f"{np.mean(p2r['pocket_sizes']):.2f}" if p2r else None)
 
-    cs_novel = novel_stats.get("CryptoSite-unique")
+    s2p_novel = novel_stats.get("Seq2Pocket-unique")
     p2r_novel = novel_stats.get("P2Rank-unique")
     row("Novel pockets (total)",
-        cs_novel["total_pockets"] if cs_novel else None,
+        s2p_novel["total_pockets"] if s2p_novel else None,
         p2r_novel["total_pockets"] if p2r_novel else None)
     row("Proteins with novel pockets",
-        cs_novel["n_proteins"] if cs_novel else None,
+        s2p_novel["n_proteins"] if s2p_novel else None,
         p2r_novel["n_proteins"] if p2r_novel else None)
 
     out.write("\n")

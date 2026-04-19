@@ -1,8 +1,8 @@
 """
-Compare P2Rank and CryptoSite binding pocket predictions.
+Compare P2Rank and Seq2Pocket binding pocket predictions.
 
 This script:
-1. Loads pocket predictions from P2Rank and CryptoSite
+1. Loads pocket predictions from P2Rank and Seq2Pocket
 2. Identifies novel pockets (limited overlap with other method)
 3. Generates summary statistics (PDB ID, pocket number, pocket size)
 4. Writes PyMOL visualization scripts for manual inspection
@@ -14,8 +14,8 @@ Output format for comparison:
   - sizes: Space-separated pocket residue counts
 
 Two output files:
-  - novel_cs_pockets.csv: CryptoSite predictions with limited P2Rank overlap
-  - p2r_unique_pockets.csv: P2Rank predictions with limited CryptoSite overlap
+  - novel_s2p_pockets.csv: Seq2Pocket predictions with limited P2Rank overlap
+  - p2r_unique_pockets.csv: P2Rank predictions with limited Seq2Pocket overlap
 
 PyMOL scripts are generated in pdb-specific subdirectories for visualization.
 """
@@ -25,7 +25,7 @@ import argparse
 from datetime import datetime
 import json
 
-parser = argparse.ArgumentParser(description="Compare P2Rank and CryptoSite pocket predictions")
+parser = argparse.ArgumentParser(description="Compare P2Rank and Seq2Pocket pocket predictions")
 parser.add_argument("--max-overlap-residues", type=int, default=0,
                     help="Maximum overlapping residues to still consider pocket unique (default: 0)")
 parser.add_argument("--max-overlap-percent", type=float, default=0,
@@ -145,7 +145,7 @@ def write_pymol_script(pdb_id, unmatched_df, pdb_dir, out_path, source_label):
         unmatched_df (pd.DataFrame): Pockets to visualize
         pdb_dir (Path): Directory containing PDB files
         out_path (Path): Output script path
-        source_label (str): Source method label (e.g. 'cs', 'p2r')
+        source_label (str): Source method label (e.g. 's2p', 'p2r')
     """
     pdb_files = list(pdb_dir.glob(f"{pdb_id}*"))
     pdb_file  = pdb_files[0] if pdb_files else pdb_dir / f"{pdb_id}.pdb"
@@ -176,7 +176,7 @@ def write_pymol_script(pdb_id, unmatched_df, pdb_dir, out_path, source_label):
 # --- Paths ---
 ROOT         = Path(__file__).parent.parent.parent.parent
 p2rank_dir   = ROOT / 'data' / 'input' / 'P2Rank'
-cs_dir       = ROOT / 'data' / 'output' / 'CS_predictions'
+s2p_dir       = ROOT / 'data' / 'output' / 'Seq2Pockets'
 pdb_dir      = ROOT / 'data' / 'input' / 'pdb'
 base_out_dir = ROOT / 'data' / 'output' / 'results'
 
@@ -213,14 +213,14 @@ print(f"{'='*60}\n")
 # --- PyMOL color palette for visualization ---
 PYMOL_COLORS = ["red", "blue", "green", "yellow", "magenta", "cyan", "orange", "violet", "salmon", "limon"]
 
-# --- Build lookup of all CS prediction files (top-level + subdirectories) ---
-cs_lookup = {}
-for cs_csv in cs_dir.rglob("*_predictions.csv"):
-    pdb_id = cs_csv.stem.replace('_predictions', '')
-    cs_lookup[pdb_id] = cs_csv
-print(f"Found {len(cs_lookup)} CryptoSite prediction files across {cs_dir}")
+# --- Build lookup of all Seq2Pocket prediction files (top-level + subdirectories) ---
+s2p_lookup = {}
+for s2p_csv in s2p_dir.rglob("*_predictions.csv"):
+    pdb_id = s2p_csv.stem.replace('_predictions', '')
+    s2p_lookup[pdb_id] = s2p_csv
+print(f"Found {len(s2p_lookup)} Seq2Pocket prediction files across {s2p_dir}")
 
-cs_log_rows  = []
+s2p_log_rows  = []
 p2r_log_rows = []
 
 resumed = args.resume_after is None
@@ -234,40 +234,40 @@ for p2r_csv in sorted(p2rank_dir.glob("*_predictions.csv")):
             print(f"Resuming after {pdb_id}...")
         continue
 
-    if pdb_id not in cs_lookup:
-        print(f"Missing CryptoSite file for {pdb_id}, skipping.")
+    if pdb_id not in s2p_lookup:
+        print(f"Missing Seq2Pocket file for {pdb_id}, skipping.")
         continue
-    cs_csv = cs_lookup[pdb_id]
+    s2p_csv = s2p_lookup[pdb_id]
 
     p2r_df = load_pockets(p2r_csv)
-    cs_df  = load_pockets(cs_csv)
+    s2p_df  = load_pockets(s2p_csv)
 
     # Unmatched pockets
-    p2r_unmatched = find_unmatched(p2r_df, cs_df)
-    cs_unmatched  = find_unmatched(cs_df,  p2r_df)
+    p2r_unmatched = find_unmatched(p2r_df, s2p_df)
+    s2p_unmatched  = find_unmatched(s2p_df,  p2r_df)
 
-    if p2r_unmatched.empty and cs_unmatched.empty:
+    if p2r_unmatched.empty and s2p_unmatched.empty:
         print(f"{pdb_id}: all pockets matched, no output.")
         continue
 
     save_unmatched(p2r_unmatched, out_base_dir / pdb_id / "p2r")
-    save_unmatched(cs_unmatched,  out_base_dir / pdb_id / "cs")
-    print(f"{pdb_id}: saved {len(p2r_unmatched)} unmatched P2R and {len(cs_unmatched)} unmatched CS pockets.")
+    save_unmatched(s2p_unmatched,  out_base_dir / pdb_id / "s2p")
+    print(f"{pdb_id}: saved {len(p2r_unmatched)} unmatched P2R and {len(s2p_unmatched)} unmatched S2P pockets.")
 
     def pocket_number(name):
         return ''.join(filter(str.isdigit, str(name)))
 
-    if not cs_unmatched.empty:
-        cs_log_rows.append({
+    if not s2p_unmatched.empty:
+        s2p_log_rows.append({
             "pdb_id":  pdb_id,
-            "pockets": " ".join(pocket_number(r["name"]) for _, r in cs_unmatched.iterrows()),
-            "sizes":   " ".join(str(len(r["residue_set"])) for _, r in cs_unmatched.iterrows()),
+            "pockets": " ".join(pocket_number(r["name"]) for _, r in s2p_unmatched.iterrows()),
+            "sizes":   " ".join(str(len(r["residue_set"])) for _, r in s2p_unmatched.iterrows()),
         })
         try:
-            write_pymol_script(pdb_id, cs_unmatched, pdb_dir,
-                               out_base_dir / pdb_id / "cs_novel.pml", "cs")
+            write_pymol_script(pdb_id, s2p_unmatched, pdb_dir,
+                               out_base_dir / pdb_id / "s2p_novel.pml", "s2p")
         except Exception as e:
-            print(f"  [WARN] {pdb_id}: failed to write CS PyMOL script: {e}")
+            print(f"  [WARN] {pdb_id}: failed to write S2P PyMOL script: {e}")
     if not p2r_unmatched.empty:
         p2r_log_rows.append({
             "pdb_id":  pdb_id,
@@ -281,9 +281,9 @@ for p2r_csv in sorted(p2rank_dir.glob("*_predictions.csv")):
             print(f"  [WARN] {pdb_id}: failed to write P2R PyMOL script: {e}")
 
 out_base_dir.mkdir(parents=True, exist_ok=True)
-if cs_log_rows:
-    pd.DataFrame(cs_log_rows).to_csv(out_base_dir / "novel_cs_pockets.csv", index=False)
-    print(f"\nNovel CS pockets saved -> {out_base_dir / 'novel_cs_pockets.csv'}")
+if s2p_log_rows:
+    pd.DataFrame(s2p_log_rows).to_csv(out_base_dir / "novel_s2p_pockets.csv", index=False)
+    print(f"\nNovel S2P pockets saved -> {out_base_dir / 'novel_s2p_pockets.csv'}")
 if p2r_log_rows:
     pd.DataFrame(p2r_log_rows).to_csv(out_base_dir / "p2r_unique_pockets.csv", index=False)
     print(f"Novel P2R pockets saved -> {out_base_dir / 'p2r_unique_pockets.csv'}")

@@ -9,12 +9,14 @@ Use --delete-corrupted to remove partial/zero-byte pairs.
 """
 import argparse
 import re
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.parent.parent
 INPUT_DIR = ROOT / 'data' / 'input' / 'pdb'
 OUTPUT_DIR = ROOT / 'data' / 'output' / 'CS_predictions'
+SEQ2POCKETS_DIR = ROOT / 'data' / 'output' / 'Seq2Pockets'
 
 PAIR_SUFFIXES = ('_predictions.csv', '_residues.csv')
 
@@ -50,6 +52,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--delete-corrupted', action='store_true',
                     help='Remove partial/zero-byte files (default: dry-run)')
+    ap.add_argument('--consolidate', action='store_true',
+                    help=f'Copy clustered prediction pairs into {SEQ2POCKETS_DIR.name}/ '
+                         '(newest run dir wins for duplicates)')
     args = ap.parse_args()
 
     inputs = set(input_pdb_ids())
@@ -73,6 +78,15 @@ def main():
     missing = sorted(inputs - covered)
     extra = sorted(covered - inputs)
     duplicates = {pid: dirs for pid, dirs in id_to_dirs.items() if len(dirs) > 1}
+
+    print(f"\n{'='*40}")
+    print(f"COVERAGE")
+    print(f"{'='*40}")
+    print(f"  Input PDBs:           {len(inputs)}")
+    print(f"  Clustered (covered):  {len(covered & inputs)}  ({100*len(covered & inputs)/len(inputs):.1f}%)")
+    print(f"  Missing:              {len(missing)}")
+    print(f"  Duplicated:           {len(duplicates)}")
+    print(f"  Corrupted entries:    {len(all_corrupted)}")
 
     print(f"\n=== MISSING ({len(missing)}) ===")
     for pid in missing:
@@ -105,6 +119,24 @@ def main():
                 f.unlink()
     elif all_corrupted:
         print("\n(Pass --delete-corrupted to remove them.)")
+
+    if args.consolidate:
+        SEQ2POCKETS_DIR.mkdir(parents=True, exist_ok=True)
+        copied, skipped = 0, 0
+        # run_dirs is sorted ascending — newest (latest timestamp prefix) is last
+        for pid, dirs in id_to_dirs.items():
+            src_dir = sorted(dirs)[-1]
+            for suf in PAIR_SUFFIXES:
+                src = src_dir / f"{pid}{suf}"
+                dst = SEQ2POCKETS_DIR / f"{pid}{suf}"
+                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                    skipped += 1
+                    continue
+                shutil.copy2(src, dst)
+                copied += 1
+        print(f"\nConsolidated → {SEQ2POCKETS_DIR}")
+        print(f"  Copied:  {copied}")
+        print(f"  Skipped (already up to date): {skipped}")
 
 
 if __name__ == '__main__':
