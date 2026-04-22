@@ -68,7 +68,7 @@ DECISION_THRESHOLD = args.decision_threshold
 PREDICTIONS_DIR = ROOT / 'data' / 'intermediate' / 'predictions'
 EMBEDDINGS_DIR  = ROOT / 'data' / 'intermediate' / 'embeddings'
 PDB_DIR         = ROOT / 'data' / 'input' / 'pdb'
-base_output_dir = ROOT / 'data' / 'output' / 'CS_predictions' #TODO will change to Seq2Pockets after consolidation
+base_output_dir = ROOT / 'data' / 'output' / 'Seq2Pockets_2' #TODO Default should be 'Seq2Pockets'
 MODEL_PATH      = ROOT / 'data' / 'models' / '3B-model.pt'
 SMOOTHING_MODEL_PATH = ROOT / 'data' / 'models' / 'smoother.pt'
 
@@ -77,7 +77,21 @@ if args.timestamp:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     unique_id = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
     param_suffix = f"decision{args.decision_threshold}_dist{args.distance_threshold}"
-    OUTPUT_DIR = base_output_dir / f"{timestamp}_{unique_id}_{param_suffix}"
+
+    def _strip_pdb(pid):
+        pid = pid.strip()
+        return pid[3:] if pid.lower().startswith("pdb") else pid
+
+    if args.resume_after or args.stop_before:
+        start = _strip_pdb(args.resume_after) if args.resume_after else ""
+        end   = _strip_pdb(args.stop_before) if args.stop_before else ""
+        range_prefix = f"{start}-{end}_"
+    elif args.pdb_list:
+        range_prefix = f"{Path(args.pdb_list).stem}_"
+    else:
+        range_prefix = ""
+
+    OUTPUT_DIR = base_output_dir / f"{range_prefix}{timestamp}_{unique_id}_{param_suffix}"
 else:
     OUTPUT_DIR = base_output_dir
 
