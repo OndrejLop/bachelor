@@ -12,7 +12,7 @@ Columns:
   s2_predictions    any data/intermediate/predictions/pdb{id}_*_predictions.csv
   s3_s2p            any data/output/Seq2Pockets*/**/pdb{id}_predictions.csv
   s3_p2r            data/input/P2Rank/pdb{id}_predictions.csv exists
-  s4_compared       data/output/results/pdb{id}/ exists and non-empty
+  s4_compared       data/output/results/[timestamp/]pdb{id}/ exists and non-empty
   s5_included       s4_compared AND pdb_id not in exclusion list
 
 Examples:
@@ -42,7 +42,7 @@ PRED_DIR        = ROOT / 'data' / 'intermediate' / 'predictions'
 S2P_BASE        = ROOT / 'data' / 'output'  # scan Seq2Pockets* dirs under here
 P2R_DIR         = ROOT / 'data' / 'input' / 'P2Rank'
 RESULTS_DIR     = ROOT / 'data' / 'output' / 'results'
-DEFAULT_EXCLUDE = ROOT / 'data' / 'input' / 'excluded_pdbs.txt'
+DEFAULT_EXCLUDE = ROOT / 'data' / 'output' / 'analysis' / 'excluded_pdbs.txt'
 DEFAULT_OUT     = ROOT / 'data' / 'intermediate' / 'pipeline_membership.csv'
 
 
@@ -88,8 +88,17 @@ def collect_ids() -> dict[str, dict[str, bool]]:
     s4_ids = set()
     if RESULTS_DIR.exists():
         for d in RESULTS_DIR.iterdir():
-            if d.is_dir() and any(d.iterdir()):
-                s4_ids.add(strip_prefix(d.name))
+            if not d.is_dir():
+                continue
+            if d.name.lower().startswith("pdb"):
+                # Flat: results/pdb{id}/
+                if any(d.iterdir()):
+                    s4_ids.add(strip_prefix(d.name))
+            else:
+                # Timestamped: results/{timestamp}_{params}/pdb{id}/
+                for sub in d.iterdir():
+                    if sub.is_dir() and sub.name.lower().startswith("pdb") and any(sub.iterdir()):
+                        s4_ids.add(strip_prefix(sub.name))
 
     all_ids = input_ids | fasta_ids | pred_ids | s2p_ids | p2r_ids | s4_ids
 

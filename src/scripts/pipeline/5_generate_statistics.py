@@ -12,7 +12,7 @@ Input:
   - Seq2Pocket predictions: data/output/Seq2Pockets/{pdb_id}_predictions.csv
   - Comparison results:    data/output/results/novel_s2p_pockets.csv
                            data/output/results/p2r_unique_pockets.csv
-  - Clustering skip log:   data/output/CS_predictions/skipped_clustering.txt (optional)
+  - Clustering skip logs:  data/output/Seq2Pockets/**/skipped_clustering.txt (aggregated)
 
 Output:
   - data/output/analysis/summary.txt
@@ -50,11 +50,6 @@ ROOT = Path(__file__).parent.parent.parent.parent
 
 
 parser = argparse.ArgumentParser(description="Generate statistics and plots from pipeline results")
-parser.add_argument("--results-dir", type=Path, default=None,
-                    help="Path to step-4 output dir containing novel_s2p_pockets.csv / p2r_unique_pockets.csv "
-                         "(default: data/output/results/)")
-parser.add_argument("--s2p-dir", type=Path, default=None,
-                    help="Path to Seq2Pocket predictions (default: data/output/Seq2Pockets/)")
 parser.add_argument("--timestamp", action="store_true",
                     help="Write analysis output into a timestamped subdir of data/output/analysis/")
 parser.add_argument("--exclude-file", type=Path, default=None,
@@ -64,9 +59,8 @@ parser.add_argument("--exclude-file", type=Path, default=None,
 args = parser.parse_args()
 
 P2RANK_DIR  = ROOT / 'data' / 'input' / 'P2Rank'
-S2P_DIR     = args.s2p_dir if args.s2p_dir else ROOT / 'data' / 'output' / 'Seq2Pockets'
-CS_DIR      = ROOT / 'data' / 'output' / 'CS_predictions'  # legacy, used only for skipped_clustering.txt lookup
-RESULTS_DIR = args.results_dir if args.results_dir else ROOT / 'data' / 'output' / 'results'
+S2P_DIR     = ROOT / 'data' / 'output' / 'Seq2Pockets'
+RESULTS_DIR = ROOT / 'data' / 'output' / 'results'
 PDB_DIR     = ROOT / 'data' / 'input' / 'pdb'
 FASTA_DIR   = ROOT / 'data' / 'intermediate' / 'fastas'
 PRED_DIR    = ROOT / 'data' / 'intermediate' / 'predictions'
@@ -123,12 +117,34 @@ def _stem_to_pdb_id(stem, strip_suffix=""):
 
 def count_files(directory, pattern, strip_suffix=""):
     """Count files matching a glob pattern in a directory, excluding EXCLUDED_PDBS."""
+    return len(ids_from_dir(directory, pattern, strip_suffix))
+
+
+def ids_from_dir(directory, pattern, strip_suffix=""):
+    """Set of PDB IDs from filenames matching pattern (recursively),
+    excluding EXCLUDED_PDBS. Uses rglob so timestamped/chunked subdirs are
+    found; dedup is automatic via set."""
     if not directory.exists():
-        return 0
-    return sum(
-        1 for p in directory.glob(pattern)
-        if _stem_to_pdb_id(p.stem, strip_suffix) not in EXCLUDED_PDBS
-    )
+        return set()
+    return {
+        pid for p in directory.rglob(pattern)
+        if (pid := _stem_to_pdb_id(p.stem, strip_suffix)) not in EXCLUDED_PDBS
+    }
+
+
+def files_by_pdb(directory, pattern, strip_suffix=""):
+    """Recursive scan returning {pdb_id: Path} keeping the first file per id.
+    Use this for any iteration that produces per-protein stats so chunked S2P
+    runs don't double-count when the same PDB appears in multiple subdirs."""
+    out = {}
+    if not directory.exists():
+        return out
+    for p in directory.rglob(pattern):
+        pid = _stem_to_pdb_id(p.stem, strip_suffix)
+        if pid in EXCLUDED_PDBS or pid in out:
+            continue
+        out[pid] = p
+    return out
 
 def load_pocket_csv(csv_path):
     """Load a pocket predictions CSV and parse residue lists."""
@@ -156,10 +172,12 @@ def collect_pocket_stats(predictions_dir, file_pattern):
     pocket_scores = []
     pocket_records = []
 
-    for csv_path in sorted(predictions_dir.glob(file_pattern)):
+    seen = set()
+    for csv_path in sorted(predictions_dir.rglob(file_pattern)):
         pdb_id = csv_path.stem.replace("_predictions", "")
-        if pdb_id in EXCLUDED_PDBS:
+        if pdb_id in EXCLUDED_PDBS or pdb_id in seen:
             continue
+        seen.add(pdb_id)
         try:
             df = load_pocket_csv(csv_path)
         except Exception:
@@ -237,10 +255,21 @@ def _violin_box(ax, datasets, labels, colors, ylabel, use_log2=False):
 # ============================================================
 
 def _read_novel_csv(filename):
-    """Load a novel-pocket CSV and drop excluded pdb_ids."""
+    """Load a novel-pocket CSV and drop excluded pdb_ids.
+    Looks first at RESULTS_DIR (flat layout), then falls back to the most
+    recent timestamped subdir (e.g. results/{timestamp}_{params}/)."""
     csv_path = RESULTS_DIR / filename
     if not csv_path.exists():
-        return None
+        timestamped = sorted([d for d in RESULTS_DIR.iterdir()
+                              if d.is_dir() and not d.name.lower().startswith("pdb")],
+                             reverse=True)
+        for d in timestamped:
+            cand = d / filename
+            if cand.exists():
+                csv_path = cand
+                break
+        else:
+            return None
     try:
         df = pd.read_csv(csv_path)
     except Exception:
@@ -260,9 +289,13 @@ def pipeline_funnel(out):
     out.write("1. PIPELINE FUNNEL\n")
     out.write("=" * 60 + "\n\n")
 
-    n_pdb = count_files(PDB_DIR, "*.pdb")
-    n_p2r_pockets = count_files(P2RANK_DIR, "*_predictions.csv", strip_suffix="_predictions")
-    n_s2p_pockets = count_files(S2P_DIR, "*_predictions.csv", strip_suffix="_predictions")
+    pdb_ids = ids_from_dir(PDB_DIR, "*.pdb")
+    p2r_ids = ids_from_dir(P2RANK_DIR, "*_predictions.csv", strip_suffix="_predictions")
+    s2p_ids = ids_from_dir(S2P_DIR, "*_predictions.csv", strip_suffix="_predictions")
+    n_pdb = len(pdb_ids)
+    n_p2r_pockets = len(p2r_ids)
+    n_s2p_pockets = len(s2p_ids)
+    n_comparable = len(s2p_ids & p2r_ids)
     n_s2p_unique = _count_novel_proteins("novel_s2p_pockets.csv")
     n_p2r_unique = _count_novel_proteins("p2r_unique_pockets.csv")
 
@@ -271,17 +304,18 @@ def pipeline_funnel(out):
     out.write(f"    P2Rank predictions:            {n_p2r_pockets}\n")
     out.write(f"  Seq2Pocket processed:\n")
     out.write(f"    Structures with S2P pockets:   {n_s2p_pockets}\n")
+    out.write(f"  Comparable (S2P AND P2R):\n")
+    out.write(f"    Structures with both methods:  {n_comparable}\n")
     out.write(f"  Proteins with unique pockets:\n")
     out.write(f"    S2P-unique:                    {n_s2p_unique}\n")
     out.write(f"    P2R-unique:                    {n_p2r_unique}\n")
 
-    # Try to read skipped_clustering.txt for attrition details
-    skip_file = CS_DIR / "skipped_clustering.txt"
-    if skip_file.exists():
-        out.write(f"\n  Clustering skip breakdown ({skip_file.name}):\n")
-        with open(skip_file) as f:
-            for line in f:
-                out.write(f"    {line.rstrip()}\n")
+    # Aggregate skipped_clustering.txt across all S2P chunk subdirs
+    skip_counts = parse_skip_log(S2P_DIR)
+    if skip_counts:
+        out.write(f"\n  Clustering skip breakdown (aggregated across S2P subdirs):\n")
+        for label, n in skip_counts.items():
+            out.write(f"    {label}: {n}\n")
 
     out.write("\n")
 
@@ -289,17 +323,20 @@ def pipeline_funnel(out):
         "n_pdb": n_pdb,
         "n_s2p_pockets": n_s2p_pockets,
         "n_p2r_pockets": n_p2r_pockets,
+        "n_comparable": n_comparable,
         "n_s2p_unique": n_s2p_unique,
         "n_p2r_unique": n_p2r_unique,
     }
 
 def plot_funnel(funnel, out_path):
-    stage_labels = ["Inputs", "Seq2Pocket\nprocessed", "Proteins with\nunique pockets"]
+    stage_labels = ["Inputs", "Seq2Pocket\nprocessed",
+                    "Comparable\n(S2P ∩ P2R)", "Proteins with\nunique pockets"]
     # Per stage: list of (label, count, color)
     stage_bars = [
         [("PDB", funnel["n_pdb"], 'dimgray'),
          ("P2Rank", funnel["n_p2r_pockets"], P2R_COLOR)],
         [("S2P", funnel["n_s2p_pockets"], S2P_COLOR)],
+        [("Comparable", funnel["n_comparable"], 'dimgray')],
         [("S2P-unique", funnel["n_s2p_unique"], S2P_COLOR),
          ("P2R-unique", funnel["n_p2r_unique"], P2R_COLOR)],
     ]
@@ -653,14 +690,12 @@ def summary_table(funnel, method_stats, novel_stats, out):
 # ============================================================
 
 def load_protein_lengths(residues_dir):
-    """Return {pdb_id: seq_length} from S2P _residues.csv row counts."""
+    """Return {pdb_id: seq_length} from S2P _residues.csv row counts.
+    Recursive scan; first file wins per PDB ID (chunked subdirs)."""
+    by_pdb = files_by_pdb(residues_dir, "*_residues.csv", strip_suffix="_residues")
+    print(f"  Scanning {len(by_pdb):,} residue files for sequence lengths...")
     lengths = {}
-    files = list(residues_dir.glob("*_residues.csv"))
-    print(f"  Scanning {len(files):,} residue files for sequence lengths...")
-    for p in files:
-        pdb_id = p.stem.replace("_residues", "")
-        if pdb_id in EXCLUDED_PDBS:
-            continue
+    for pdb_id, p in by_pdb.items():
         try:
             with open(p, 'rb') as f:
                 n = sum(1 for _ in f) - 1
@@ -681,12 +716,9 @@ def collect_aa_composition(directory, res_col, pocket_col):
     counts = Counter()
     if not directory.exists():
         return counts
-    files = list(directory.glob("*_residues.csv"))
-    print(f"  Scanning {len(files):,} residue files in {directory.name} for AA composition...")
-    for p in files:
-        pdb_id = p.stem.replace("_residues", "")
-        if pdb_id in EXCLUDED_PDBS:
-            continue
+    by_pdb = files_by_pdb(directory, "*_residues.csv", strip_suffix="_residues")
+    print(f"  Scanning {len(by_pdb):,} residue files in {directory.name} for AA composition...")
+    for pdb_id, p in by_pdb.items():
         try:
             df = pd.read_csv(p, skipinitialspace=True)
         except Exception:
@@ -727,20 +759,29 @@ def plot_aa_composition(aa_counts_by_method, out_path):
     plt.close(fig)
 
 
-def parse_skip_log(skip_file):
-    """Parse skipped_clustering.txt into {label: count}."""
-    if not skip_file.exists():
-        return {}
+def parse_skip_log(skip_path):
+    """Parse skipped_clustering.txt into {label: count}.
+
+    skip_path may be a single file (legacy) or a directory; if a directory
+    is given, aggregates counts across every skipped_clustering.txt found
+    recursively under it (one per chunk subdir)."""
     counts = {}
-    with open(skip_file) as f:
-        for line in f:
-            if ':' not in line:
-                continue
-            label, _, val = line.partition(':')
-            try:
-                counts[label.strip()] = int(val.strip().split()[0])
-            except (ValueError, IndexError):
-                continue
+    if skip_path.is_dir():
+        files = list(skip_path.rglob("skipped_clustering.txt"))
+    elif skip_path.is_file():
+        files = [skip_path]
+    else:
+        return {}
+    for f in files:
+        with open(f) as fh:
+            for line in fh:
+                if ':' not in line:
+                    continue
+                label, _, val = line.partition(':')
+                try:
+                    counts[label.strip()] = counts.get(label.strip(), 0) + int(val.strip().split()[0])
+                except (ValueError, IndexError):
+                    continue
     return counts
 
 
@@ -794,14 +835,11 @@ def threshold_sweep(directories, thresholds):
         if not directory.exists():
             result[method] = None
             continue
-        files = list(directory.glob("*_residues.csv"))
-        print(f"  Threshold sweep: scanning {len(files):,} files in {directory.name}...")
+        by_pdb = files_by_pdb(directory, "*_residues.csv", strip_suffix="_residues")
+        print(f"  Threshold sweep: scanning {len(by_pdb):,} files in {directory.name}...")
         totals = np.zeros(len(thresholds), dtype=np.int64)
         per_protein_counts = [[] for _ in thresholds]
-        for p in files:
-            pdb_id = p.stem.replace("_residues", "")
-            if pdb_id in EXCLUDED_PDBS:
-                continue
+        for pdb_id, p in by_pdb.items():
             try:
                 df = pd.read_csv(p, skipinitialspace=True, usecols=lambda c: c.strip() == prob_col)
             except Exception:
@@ -1068,6 +1106,409 @@ def plot_novel_ratio(method_stats, novel_stats, out_path):
 
 
 # ============================================================
+# Per-class analysis (uses pdb_classification.csv from tool 14
+# and pipeline_membership.csv from tool 15)
+# ============================================================
+
+EC_NAMES = {
+    "1": "Oxidoreductases",
+    "2": "Transferases",
+    "3": "Hydrolases",
+    "4": "Lyases",
+    "5": "Isomerases",
+    "6": "Ligases",
+    "7": "Translocases",
+}
+
+
+def _normalize_pdb_id(pid: str) -> str:
+    p = str(pid).strip().lower()
+    return p[3:] if p.startswith("pdb") else p
+
+
+def _load_classification(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype=str).fillna("")
+    df["pdb_id"] = df["pdb_id"].map(_normalize_pdb_id)
+    df["classification"] = df["classification"].str.strip().replace("", "UNKNOWN")
+    if "ec_numbers" in df.columns:
+        df["ec_top"] = df["ec_numbers"].apply(
+            lambda s: s.split(";")[0].strip() if s and s.strip() else "")
+    else:
+        df["ec_top"] = ""
+    return df[["pdb_id", "classification", "ec_top"]]
+
+
+def _load_comparable(membership_path: Path) -> set[str]:
+    df = pd.read_csv(membership_path, dtype={"pdb_id": str})
+    mask = (df["s3_s2p"].astype(int) == 1) & (df["s3_p2r"].astype(int) == 1)
+    return set(df.loc[mask, "pdb_id"].map(_normalize_pdb_id))
+
+
+def _load_unique_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["pdb_id", "n_unique", "sizes"])
+    df = pd.read_csv(path)
+    df["pdb_id"] = df["pdb_id"].map(_normalize_pdb_id)
+    df["n_unique"] = df["pockets"].fillna("").apply(lambda s: len(s.split()) if s else 0)
+    if "sizes" in df.columns:
+        df["sizes"] = df["sizes"].fillna("").apply(
+            lambda s: [int(x) for x in s.split() if x.isdigit()] if s else [])
+    else:
+        df["sizes"] = [[] for _ in range(len(df))]
+    return df[["pdb_id", "n_unique", "sizes"]]
+
+
+def _find_novel_csvs(results_dir: Path) -> tuple[Path, Path] | None:
+    name = "novel_s2p_pockets.csv"
+    flat = results_dir / name
+    if flat.exists():
+        return flat, results_dir / "p2r_unique_pockets.csv"
+    timestamped = sorted([d for d in results_dir.iterdir()
+                          if d.is_dir() and not d.name.lower().startswith("pdb")],
+                         reverse=True)
+    for d in timestamped:
+        p = d / name
+        if p.exists():
+            return p, d / "p2r_unique_pockets.csv"
+    return None
+
+
+def _per_class_stats(classification: pd.DataFrame,
+                     comparable: set[str],
+                     s2p_df: pd.DataFrame,
+                     p2r_df: pd.DataFrame,
+                     lengths: dict | None = None,
+                     p2r_totals: dict | None = None,
+                     s2p_totals: dict | None = None,
+                     group_col: str = "classification"):
+    """Returns (stats_df, sizes_per_class, n_unique_per_class).
+       stats_df: aggregated metrics per class.
+       sizes_per_class: {class: [pocket_size, ...]} S2P-unique pocket sizes
+       n_unique_per_class: {class: [n_per_protein, ...]} for distribution plots
+    """
+    df = classification[classification["pdb_id"].isin(comparable)].copy()
+    s2p_n   = dict(zip(s2p_df["pdb_id"], s2p_df["n_unique"]))
+    s2p_sz  = dict(zip(s2p_df["pdb_id"], s2p_df["sizes"]))
+    p2r_n   = dict(zip(p2r_df["pdb_id"], p2r_df["n_unique"]))
+
+    df["s2p_unique"] = df["pdb_id"].map(s2p_n).fillna(0).astype(int)
+    df["s2p_sizes"]  = df["pdb_id"].map(s2p_sz).apply(
+        lambda x: x if isinstance(x, list) else [])
+    df["p2r_unique"] = df["pdb_id"].map(p2r_n).fillna(0).astype(int)
+
+    lengths_norm = {_normalize_pdb_id(k): v for k, v in (lengths or {}).items()}
+    p2r_totals_norm = {_normalize_pdb_id(k): v for k, v in (p2r_totals or {}).items()}
+    s2p_totals_norm = {_normalize_pdb_id(k): v for k, v in (s2p_totals or {}).items()}
+    df["seq_length"] = df["pdb_id"].map(lengths_norm).fillna(0).astype(int)
+    df["p2r_total"]  = df["pdb_id"].map(p2r_totals_norm).fillna(0).astype(int)
+    df["s2p_total"]  = df["pdb_id"].map(s2p_totals_norm).fillna(0).astype(int)
+
+    grouped = df.groupby(group_col).agg(
+        n_proteins=("pdb_id", "count"),
+        n_with_s2p_unique=("s2p_unique", lambda s: int((s > 0).sum())),
+        n_with_p2r_unique=("p2r_unique", lambda s: int((s > 0).sum())),
+        mean_s2p_unique=("s2p_unique", "mean"),
+        mean_p2r_unique=("p2r_unique", "mean"),
+        total_s2p_unique=("s2p_unique", "sum"),
+        total_s2p_total=("s2p_total", "sum"),
+        total_p2r_total=("p2r_total", "sum"),
+        total_seq_length=("seq_length", "sum"),
+    ).reset_index().rename(columns={group_col: "classification"})
+
+    grouped["s2p_unique_rate"] = grouped["n_with_s2p_unique"] / grouped["n_proteins"]
+    grouped["p2r_unique_rate"] = grouped["n_with_p2r_unique"] / grouped["n_proteins"]
+    grouped["delta_rate"] = grouped["s2p_unique_rate"] - grouped["p2r_unique_rate"]
+    grouped["s2p_per_kresidue"] = (
+        1000.0 * grouped["total_s2p_unique"] / grouped["total_seq_length"].replace(0, np.nan))
+    grouped["s2p_to_p2r_ratio"] = (
+        grouped["total_s2p_unique"] / grouped["total_p2r_total"].replace(0, np.nan))
+    grouped["s2p_novelty_rate"] = (
+        grouped["total_s2p_unique"] / grouped["total_s2p_total"].replace(0, np.nan))
+
+    sizes_per_class = df.groupby(group_col)["s2p_sizes"].apply(
+        lambda series: [s for sublist in series for s in sublist]).to_dict()
+    n_unique_per_class = df.groupby(group_col)["s2p_unique"].apply(list).to_dict()
+
+    grouped = grouped.sort_values("n_proteins", ascending=False).reset_index(drop=True)
+    return grouped, sizes_per_class, n_unique_per_class
+
+
+def _collapse_long_tail(stats: pd.DataFrame, top_n: int) -> pd.DataFrame:
+    if len(stats) <= top_n:
+        return stats
+    head = stats.iloc[:top_n].copy()
+    tail = stats.iloc[top_n:]
+    other_n = int(tail["n_proteins"].sum())
+    total_s2p = int(tail["total_s2p_unique"].sum())
+    total_s2p_all = int(tail["total_s2p_total"].sum())
+    total_p2r = int(tail["total_p2r_total"].sum())
+    total_len = int(tail["total_seq_length"].sum())
+    other = pd.DataFrame([{
+        "classification": "OTHER",
+        "n_proteins": other_n,
+        "n_with_s2p_unique": int(tail["n_with_s2p_unique"].sum()),
+        "n_with_p2r_unique": int(tail["n_with_p2r_unique"].sum()),
+        "mean_s2p_unique": float((tail["mean_s2p_unique"] * tail["n_proteins"]).sum() / max(other_n, 1)),
+        "mean_p2r_unique": float((tail["mean_p2r_unique"] * tail["n_proteins"]).sum() / max(other_n, 1)),
+        "total_s2p_unique": total_s2p,
+        "total_s2p_total":  total_s2p_all,
+        "total_p2r_total":  total_p2r,
+        "total_seq_length": total_len,
+        "s2p_unique_rate": float(tail["n_with_s2p_unique"].sum() / max(other_n, 1)),
+        "p2r_unique_rate": float(tail["n_with_p2r_unique"].sum() / max(other_n, 1)),
+        "delta_rate":      0.0,
+        "s2p_per_kresidue": (1000.0 * total_s2p / total_len) if total_len else float("nan"),
+        "s2p_to_p2r_ratio": (total_s2p / total_p2r) if total_p2r else float("nan"),
+        "s2p_novelty_rate": (total_s2p / total_s2p_all) if total_s2p_all else float("nan"),
+    }])
+    other["delta_rate"] = other["s2p_unique_rate"] - other["p2r_unique_rate"]
+    return pd.concat([head, other], ignore_index=True)
+
+
+def plot_class_composition(stats: pd.DataFrame, out_path: Path):
+    fig, ax = plt.subplots(figsize=(8, max(4, 0.3 * len(stats))))
+    y = np.arange(len(stats))
+    ax.barh(y, stats["n_proteins"], color='steelblue', edgecolor='black')
+    ax.set_yticks(y)
+    ax.set_yticklabels(stats["classification"], fontsize=9)
+    ax.invert_yaxis()
+    ax.set_xlabel("Comparable proteins")
+    ax.set_title("Dataset composition by header classification")
+    total = int(stats["n_proteins"].sum())
+    for i, n in enumerate(stats["n_proteins"]):
+        ax.text(n, i, f"  {n} ({100*n/total:.1f}%)", va='center', fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_unique_rate(stats: pd.DataFrame, out_path: Path):
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(stats)), 5.5))
+    x = np.arange(len(stats))
+    width = 0.4
+    ax.bar(x - width/2, stats["s2p_unique_rate"], width, color=S2P_COLOR,
+           edgecolor='black', label='S2P-unique')
+    ax.bar(x + width/2, stats["p2r_unique_rate"], width, color=P2R_COLOR,
+           edgecolor='black', label='P2R-unique')
+    ax.set_xticks(x)
+    ax.set_xticklabels(stats["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("Fraction of comparable proteins\nwith ≥1 unique pocket", fontsize=10)
+    ax.set_title("Unique-pocket rate by classification")
+    ax.legend()
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_total_s2p(stats: pd.DataFrame, out_path: Path,
+                         title="Total S2P-unique pockets by classification"):
+    sorted_df = stats.sort_values("total_s2p_unique", ascending=False).reset_index(drop=True)
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
+    ax.bar(np.arange(len(sorted_df)), sorted_df["total_s2p_unique"],
+           color=S2P_COLOR, edgecolor='black')
+    ax.set_xticks(np.arange(len(sorted_df)))
+    ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("Total S2P-unique pockets")
+    ax.set_title(title)
+    for i, n in enumerate(sorted_df["total_s2p_unique"]):
+        ax.text(i, n, f"{int(n)}", ha='center', va='bottom', fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_s2p_size_distribution(sizes_per_class: dict, stats: pd.DataFrame, out_path: Path):
+    """Violin per top-N class of S2P-unique pocket sizes."""
+    classes = [c for c in stats["classification"]
+               if sizes_per_class.get(c)]
+    data = [sizes_per_class[c] for c in classes]
+    if not data or all(len(d) == 0 for d in data):
+        return
+    fig, ax = plt.subplots(figsize=(max(8, 0.6 * len(classes)), 5.5))
+    parts = ax.violinplot(data, showmeans=True, showmedians=True)
+    for body in parts['bodies']:
+        body.set_facecolor(S2P_COLOR)
+        body.set_alpha(0.6)
+    ax.set_xticks(np.arange(1, len(classes) + 1))
+    ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("S2P-unique pocket size (residues)")
+    ax.set_title("S2P-unique pocket size distribution by classification")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_s2p_per_protein(n_unique_per_class: dict, stats: pd.DataFrame, out_path: Path):
+    """Boxplot per class of S2P-unique pocket counts per protein (excluding zeros)."""
+    classes = list(stats["classification"])
+    data = []
+    for c in classes:
+        vals = [v for v in n_unique_per_class.get(c, []) if v > 0]
+        data.append(vals if vals else [0])
+    if all(sum(d) == 0 for d in data):
+        return
+    fig, ax = plt.subplots(figsize=(max(8, 0.6 * len(classes)), 5.5))
+    bp = ax.boxplot(data, patch_artist=True, showfliers=True)
+    for patch in bp['boxes']:
+        patch.set_facecolor(S2P_COLOR)
+        patch.set_alpha(0.6)
+    ax.set_xticks(np.arange(1, len(classes) + 1))
+    ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("S2P-unique pockets per protein\n(among proteins with ≥1)", fontsize=10)
+    ax.set_title("S2P-unique pockets per protein by classification")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_s2p_per_residue(stats: pd.DataFrame, out_path: Path):
+    sorted_df = stats.dropna(subset=["s2p_per_kresidue"]).sort_values(
+        "s2p_per_kresidue", ascending=False).reset_index(drop=True)
+    if sorted_df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
+    ax.bar(np.arange(len(sorted_df)), sorted_df["s2p_per_kresidue"],
+           color=S2P_COLOR, edgecolor='black')
+    ax.set_xticks(np.arange(len(sorted_df)))
+    ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("S2P-unique pockets per 1000 residues")
+    ax.set_title("S2P-unique pocket density by classification (size-normalized)")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_s2p_novelty_rate(stats: pd.DataFrame, out_path: Path,
+                                title="S2P novelty rate by classification"):
+    """Bar chart: total_s2p_unique / total_s2p_total per class. Sorted desc.
+    Higher = more S2P pockets are unique to S2P (not overlapping with P2R)."""
+    sorted_df = stats.dropna(subset=["s2p_novelty_rate"]).sort_values(
+        "s2p_novelty_rate", ascending=False).reset_index(drop=True)
+    if sorted_df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
+    ax.bar(np.arange(len(sorted_df)), sorted_df["s2p_novelty_rate"],
+           color=S2P_COLOR, edgecolor='black')
+    ax.set_xticks(np.arange(len(sorted_df)))
+    ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("S2P-unique pockets  /  all S2P pockets")
+    ax.set_title(title)
+    for i, r in enumerate(sorted_df["s2p_novelty_rate"]):
+        ax.text(i, r, f"{r:.2f}", ha='center', va='bottom', fontsize=8)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_s2p_p2r_ratio(stats: pd.DataFrame, out_path: Path):
+    sorted_df = stats.dropna(subset=["s2p_to_p2r_ratio"]).sort_values(
+        "s2p_to_p2r_ratio", ascending=False).reset_index(drop=True)
+    if sorted_df.empty:
+        return
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
+    ax.bar(np.arange(len(sorted_df)), sorted_df["s2p_to_p2r_ratio"],
+           color=S2P_COLOR, edgecolor='black')
+    ax.axhline(1, color='black', lw=0.5, linestyle='--')
+    ax.set_xticks(np.arange(len(sorted_df)))
+    ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("Total S2P-unique  /  Total P2Rank pockets")
+    ax.set_title("How many novel pockets S2P contributes per P2Rank pocket, by class")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def plot_class_delta(stats: pd.DataFrame, out_path: Path):
+    sorted_df = stats.sort_values("delta_rate", ascending=False).reset_index(drop=True)
+    fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
+    colors = [S2P_COLOR if d >= 0 else P2R_COLOR for d in sorted_df["delta_rate"]]
+    ax.bar(np.arange(len(sorted_df)), sorted_df["delta_rate"],
+           color=colors, edgecolor='black')
+    ax.axhline(0, color='black', lw=0.5)
+    ax.set_xticks(np.arange(len(sorted_df)))
+    ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
+    ax.set_ylabel("S2P-unique rate  −  P2R-unique rate")
+    ax.set_title("Where S2P helps most (positive) vs where P2R does (negative)")
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def run_classification_analysis(out, plots_dir, results_dir,
+                                lengths=None, p2r_totals=None, s2p_totals=None):
+    """Per-class S2P-vs-P2R analysis. Skips with a notice if any required
+    input (classification CSV, membership CSV, novel/unique CSVs) is missing."""
+    classification_csv = ROOT / 'data' / 'intermediate' / 'pdb_classification.csv'
+    membership_csv     = ROOT / 'data' / 'intermediate' / 'pipeline_membership.csv'
+    stats_csv          = ROOT / 'data' / 'intermediate' / 'classification_stats.csv'
+    ec_stats_csv       = ROOT / 'data' / 'intermediate' / 'classification_stats_ec.csv'
+
+    out.write("=" * 60 + "\n")
+    out.write("6. PER-CLASS ANALYSIS\n")
+    out.write("=" * 60 + "\n\n")
+
+    missing = [p for p in (classification_csv, membership_csv) if not p.exists()]
+    if missing:
+        out.write(f"  Skipped — missing prerequisite(s): {[str(p.name) for p in missing]}\n")
+        out.write("  Run tool 14 (classify_pdbs) and/or tool 15 (--make) first.\n\n")
+        return
+
+    novel_pair = _find_novel_csvs(results_dir)
+    if novel_pair is None:
+        out.write(f"  Skipped — no novel_s2p_pockets.csv found under {results_dir}\n\n")
+        return
+    s2p_csv, p2r_csv = novel_pair
+
+    classification = _load_classification(classification_csv)
+    comparable = _load_comparable(membership_csv)
+    s2p_df = _load_unique_csv(s2p_csv)
+    p2r_df = _load_unique_csv(p2r_csv)
+
+    stats, sizes_per_class, n_per_class = _per_class_stats(
+        classification, comparable, s2p_df, p2r_df,
+        lengths=lengths, p2r_totals=p2r_totals, s2p_totals=s2p_totals)
+    stats_csv.parent.mkdir(parents=True, exist_ok=True)
+    stats.to_csv(stats_csv, index=False)
+    out.write(f"  Per-class stats CSV: {stats_csv.name}  ({len(stats)} classes)\n")
+
+    plot_stats = _collapse_long_tail(stats, top_n=15)
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    plot_class_composition(plot_stats, plots_dir / "classification_composition.png")
+    plot_class_unique_rate(plot_stats, plots_dir / "classification_unique_rate.png")
+    plot_class_delta(plot_stats, plots_dir / "classification_delta.png")
+    plot_class_total_s2p(plot_stats, plots_dir / "classification_total_s2p_unique.png")
+    plot_class_s2p_size_distribution(sizes_per_class, plot_stats,
+        plots_dir / "classification_s2p_size_distribution.png")
+    plot_class_s2p_per_protein(n_per_class, plot_stats,
+        plots_dir / "classification_s2p_per_protein.png")
+    plot_class_s2p_per_residue(plot_stats, plots_dir / "classification_s2p_per_residue.png")
+    plot_class_s2p_p2r_ratio(plot_stats, plots_dir / "classification_s2p_p2r_ratio.png")
+    plot_class_s2p_novelty_rate(plot_stats, plots_dir / "classification_s2p_novelty_rate.png")
+    out.write(f"  Wrote 9 classification plots\n")
+
+    # EC-class breakdown (enzymes only)
+    ec_classification = classification[classification["ec_top"] != ""].copy()
+    if not ec_classification.empty:
+        ec_stats, _, _ = _per_class_stats(
+            ec_classification, comparable, s2p_df, p2r_df,
+            lengths=lengths, p2r_totals=p2r_totals, s2p_totals=s2p_totals,
+            group_col="ec_top")
+        ec_stats.to_csv(ec_stats_csv, index=False)
+        # Relabel raw EC numbers with names for the plot only (CSV keeps raw)
+        ec_named = ec_stats.copy()
+        ec_named["classification"] = ec_named["classification"].map(
+            lambda c: f"{c}: {EC_NAMES.get(str(c), 'Unknown')}")
+        plot_class_total_s2p(ec_named, plots_dir / "ec_total_s2p_unique.png",
+                             title="Total S2P-unique pockets by EC top-level class")
+        plot_class_s2p_novelty_rate(ec_named, plots_dir / "ec_s2p_novelty_rate.png",
+                                    title="S2P novelty rate by EC top-level class")
+        out.write(f"  EC stats CSV: {ec_stats_csv.name}  ({len(ec_stats)} EC classes) "
+                  f"+ ec_total_s2p_unique.png + ec_s2p_novelty_rate.png\n")
+    out.write("\n")
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -1110,7 +1551,7 @@ if __name__ == "__main__":
         }
         plot_aa_composition(aa_counts, PLOTS_DIR / "aa_composition.png")
 
-        skip_breakdown = parse_skip_log(CS_DIR / "skipped_clustering.txt")
+        skip_breakdown = parse_skip_log(S2P_DIR)
         plot_skip_breakdown(skip_breakdown, PLOTS_DIR / "clustering_skip_breakdown.png")
 
         sweep = threshold_sweep(
@@ -1120,7 +1561,18 @@ if __name__ == "__main__":
         )
         plot_threshold_sweep(sweep, PLOTS_DIR / "threshold_sweep.png")
 
-        # 6. Summary table
+        # 6. Per-class analysis (uses pdb_classification.csv if present)
+        p2r_pp = per_protein.get("P2Rank") if per_protein else None
+        s2p_pp = per_protein.get("Seq2Pocket") if per_protein else None
+        p2r_totals = (dict(zip(p2r_pp["pdb_id"], p2r_pp["n_pockets"]))
+                      if p2r_pp is not None else {})
+        s2p_totals = (dict(zip(s2p_pp["pdb_id"], s2p_pp["n_pockets"]))
+                      if s2p_pp is not None else {})
+        run_classification_analysis(out, PLOTS_DIR, RESULTS_DIR,
+                                    lengths=lengths,
+                                    p2r_totals=p2r_totals, s2p_totals=s2p_totals)
+
+        # 7. Summary table
         summary_table(funnel, method_stats, novel_stats, out)
 
     print(f"Statistics written to: {summary_path}")
