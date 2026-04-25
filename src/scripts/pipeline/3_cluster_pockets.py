@@ -68,7 +68,7 @@ DECISION_THRESHOLD = args.decision_threshold
 PREDICTIONS_DIR = ROOT / 'data' / 'intermediate' / 'predictions'
 EMBEDDINGS_DIR  = ROOT / 'data' / 'intermediate' / 'embeddings'
 PDB_DIR         = ROOT / 'data' / 'input' / 'pdb'
-base_output_dir = ROOT / 'data' / 'output' / 'Seq2Pockets_2' #TODO Default should be 'Seq2Pockets'
+base_output_dir = ROOT / 'data' / 'output' / 'Seq2Pockets'
 MODEL_PATH      = ROOT / 'data' / 'models' / '3B-model.pt'
 SMOOTHING_MODEL_PATH = ROOT / 'data' / 'models' / 'smoother.pt'
 
