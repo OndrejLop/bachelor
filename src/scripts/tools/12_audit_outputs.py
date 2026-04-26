@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Audit CS_predictions output: missing PDBs, duplicates across run dirs, corrupted pairs.
+Audit Seq2Pockets output: missing PDBs, duplicates across run dirs, corrupted pairs.
 
 A PDB is OK in a run dir if both {pdb_id}_predictions.csv and {pdb_id}_residues.csv
 exist and are non-empty. Anything else is corrupted.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.parent.parent
 INPUT_DIR = ROOT / 'data' / 'input' / 'pdb'
-OUTPUT_DIR = ROOT / 'data' / 'output' / 'CS_predictions'
+OUTPUT_DIR = ROOT / 'data' / 'output' / 'Seq2Pockets'
 SEQ2POCKETS_DIR = ROOT / 'data' / 'output' / 'Seq2Pockets'
 
 PAIR_SUFFIXES = ('_predictions.csv', '_residues.csv')
@@ -49,7 +49,7 @@ def scan_run_dir(run_dir: Path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--delete-corrupted', action='store_true',
                     help='Remove partial/zero-byte files (default: dry-run)')
     ap.add_argument('--consolidate', action='store_true',

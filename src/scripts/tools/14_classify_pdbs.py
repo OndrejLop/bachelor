@@ -87,7 +87,7 @@ def extract_row(entry: dict) -> tuple[str, str, str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--batch-size", type=int, default=100,
                         help="PDB IDs per GraphQL query (default 100)")
     parser.add_argument("--sleep", type=float, default=0.1,

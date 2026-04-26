@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 
 SRC_DIR = Path("/home/lopatkao/bachelor/p2rank/predictions/PDBe-p2rank-2.4-conservation-hmm/predictions")
-DST_DIR = Path("/home/lopatkao/bachelor/git/data/input/P2Rank")
+DST_DIR = Path(__file__).parent.parent.parent.parent / 'data' / 'input' / 'P2Rank'
 
 DST_DIR.mkdir(parents=True, exist_ok=True)
 
