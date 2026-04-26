@@ -8,7 +8,7 @@ import shutil
 def gunzip_files():
     # Specify input and output directories here
     input_dir = "/home/lopatkao/bachelor/p2rank/datasets/pdb"
-    output_dir = "/home/lopatkao/bachelor/git/data/input/pdb"
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), 'data', 'input', 'pdb')
     
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)

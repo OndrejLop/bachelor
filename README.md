@@ -101,7 +101,7 @@ data/
 │   ├── 3B-model.pt              # Fine-tuned ESM2 3B model
 │   └── smoother.pt              # Smoothing refinement model
 └── output/
-    ├── CS_predictions/          # Final binding site predictions
+    ├── Seq2Pockets/          # Final binding site predictions
     └── results/                 # Comparison results and visualizations
 ```
 
@@ -135,7 +135,7 @@ For detailed documentation, see [PIPELINE.md](PIPELINE.md)
 - `--timestamp`: Prevent output overwrites (optional)
 
 ### Step 4: Compare Pockets
-**Input:** CS predictions, P2Rank predictions, PDB structures
+**Input:** Seq2Pockets predictions, P2Rank predictions, PDB structures
 **Output:** Novel pockets summary + PyMOL visualization scripts
 **Purpose:** Identify differences between methods
 
@@ -276,7 +276,7 @@ for threshold in 0.6 0.65 0.7 0.75 0.8; do
 done
 
 # Compare results
-ls data/output/CS_predictions/
+ls data/output/Seq2Pockets/
 ```
 
 ### Example 3: Lenient Overlap Matching

@@ -390,7 +390,7 @@ def compute_distance_matrix(pdb_path, chain_id):
     # _, residue_types = get_residues(protein)
 
     # To calculate embeddings later
-    # sequence = ''.join([cryptoshow_utils.three_to_one(residue_type) for residue_type in residue_types])
+    # sequence = ''.join([s2p_utils.three_to_one(residue_type) for residue_type in residue_types])
     # with open(f'{PATH}/data/sequences/pdb1a00_{chain_id}.txt', 'w') as f:
     #     f.write(sequence)
 
@@ -532,7 +532,7 @@ for PDB_ID, chain_ids in pdb_chains.items():
                     print(f'Smoothing: Chain {chain_id} Residue {residue_idx} set to binding based on surrounding residues')
                     new_binding_indices.append(residue_idx)
         
-            smoothed_predictions[chain_id] = np.array(new_binding_indices)
+            smoothed_predictions[chain_id] = np.array(new_binding_indices) # FIXME: predictions dict is mutated below but this uses the older array
         
         if not predictions or all(len(p) == 0 for p in predictions.values()):
             print(f'  [SKIP] {PDB_ID}: no binding residues above threshold')
@@ -568,7 +568,7 @@ for PDB_ID, chain_ids in pdb_chains.items():
 
         skip_counts["processed_ok"] += 1
 
-    except Exception as e:
+    except Exception as e: # FIXME: Broad except clause
         print(f'  [ERROR] {PDB_ID}: {e}')
         skip_counts["error"] += 1
 

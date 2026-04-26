@@ -9,10 +9,10 @@ This script analyzes outputs from previous pipeline steps:
 
 Input:
   - P2Rank predictions:    data/input/P2Rank/{pdb_id}_predictions.csv
-  - Seq2Pocket predictions: data/output/Seq2Pockets/{pdb_id}_predictions.csv
+  - Seq2Pocket predictions: data/output/Seq2Pocket/{pdb_id}_predictions.csv
   - Comparison results:    data/output/results/novel_s2p_pockets.csv
                            data/output/results/p2r_unique_pockets.csv
-  - Clustering skip logs:  data/output/Seq2Pockets/**/skipped_clustering.txt (aggregated)
+  - Clustering skip logs:  data/output/Seq2Pocket/**/skipped_clustering.txt (aggregated)
 
 Output:
   - data/output/analysis/summary.txt
@@ -59,7 +59,7 @@ parser.add_argument("--exclude-file", type=Path, default=None,
 args = parser.parse_args()
 
 P2RANK_DIR  = ROOT / 'data' / 'input' / 'P2Rank'
-S2P_DIR     = ROOT / 'data' / 'output' / 'Seq2Pockets'
+S2P_DIR     = ROOT / 'data' / 'output' / 'Seq2Pocket'
 RESULTS_DIR = ROOT / 'data' / 'output' / 'results'
 PDB_DIR     = ROOT / 'data' / 'input' / 'pdb'
 FASTA_DIR   = ROOT / 'data' / 'intermediate' / 'fastas'
@@ -1513,7 +1513,6 @@ def run_classification_analysis(out, plots_dir, results_dir,
 # ============================================================
 
 if __name__ == "__main__":
-    import sys
 
     summary_path = STATS_DIR / "summary.txt"
     with open(summary_path, 'w') as out:
@@ -1583,22 +1582,22 @@ if __name__ == "__main__":
         print(f.read())
 
 # ============================================================
-# SUGGESTIONS TODO
-# ============================================================
+'''
+SUGGESTIONS TODO:
+3. METHOD AGREEMENT (requires matched PDB IDs between methods)
+   - Per protein: count overlapping vs unique pockets
+   - Jaccard similarity of residue sets for matched pockets
+   - Fraction of proteins where both methods agree on >= 1 pocket
+   - Heatmap of agreement scores across proteins
 #
-# 3. METHOD AGREEMENT (requires matched PDB IDs between methods)
-#    - Per protein: count overlapping vs unique pockets
-#    - Jaccard similarity of residue sets for matched pockets
-#    - Fraction of proteins where both methods agree on >= 1 pocket
-#    - Heatmap of agreement scores across proteins
+5. RESIDUE-LEVEL ANALYSIS (requires _residues.csv from step 3)
+   - Distribution of binding probabilities across all residues
+   - Fraction of residues predicted as binding per protein
+   - Correlation between binding fraction and protein length
+   - ROC / PR curves if ground truth labels available
 #
-# 5. RESIDUE-LEVEL ANALYSIS (requires _residues.csv from step 3)
-#    - Distribution of binding probabilities across all residues
-#    - Fraction of residues predicted as binding per protein
-#    - Correlation between binding fraction and protein length
-#    - ROC / PR curves if ground truth labels available
-#
-# Additional ideas:
-#    - Pocket score vs pocket size scatter plot
-#    - Per-chain analysis (multi-chain proteins)
-#    - Export statistics as LaTeX tables for thesis
+Additional ideas:
+   - Pocket score vs pocket size scatter plot
+   - Per-chain analysis (multi-chain proteins)
+   - Export statistics as LaTeX tables for thesis
+'''
