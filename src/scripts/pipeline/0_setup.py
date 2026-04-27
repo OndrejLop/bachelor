@@ -3,16 +3,22 @@
 Step 0 — set up the working environment from a fresh git clone.
 
 Performs these stages, each idempotent (skips if target already present):
-  1. Download trained models -> data/models/
-  2. Download prankweb tarball + extract -> {prankweb-extract dir}
-  3. Determine PDB scope (CLI; defaults to all PDBs available in prankweb)
-  4. Download PDB structures from RCSB -> data/input/pdb/
-  5. Extract per-PDB P2Rank CSVs from prankweb -> data/input/P2Rank/
+  1.  Download trained S2P models    -> data/models/
+  1b. Install P2Rank 2.5.1 tool      -> data/tools/p2rank_2.5.1/
+  2.  Download prankweb tarball      -> /scratch/.../prankweb.tar.gz
+      + extract                       -> {prankweb-extract dir}
+  3.  Determine PDB scope (CLI; defaults to all PDBs available in prankweb)
+  4.  Download PDB structures        -> data/input/pdb/  (from RCSB)
+  5.  Extract per-PDB P2Rank CSVs    -> data/input/P2Rank/  (from prankweb tree)
 
 CLI:
-  --pdb-list PATH       Use only PDB IDs listed in PATH (one per line)
-  --pdb-list none       Skip PDB download AND P2Rank extraction
-  (no flag)             Use all PDBs that have a prankweb prediction
+  --pdb-list PATH       Download PDBs listed in PATH (one per line) and
+                        extract their matching P2Rank predictions from prankweb
+  --pdb-list all        Download every PDB that has a prankweb prediction
+                        (caution: ~30-80 GB and several hours)
+  (no flag, default)    Skip PDB download and P2Rank extraction entirely
+                        — step 0 only installs models, P2Rank tool, and
+                        (unless --skip-prankweb) the bulk prankweb tarball
 
   --models-url URL      Override default models download URL
   --prankweb-url URL    Override default prankweb tarball URL
@@ -41,12 +47,15 @@ DATA = ROOT / 'data'
 MODELS_DIR = DATA / 'models'
 PDB_DIR = DATA / 'input' / 'pdb'
 P2R_DIR = DATA / 'input' / 'P2Rank'
+TOOLS_DIR = DATA / 'tools'
+P2RANK_DIR = TOOLS_DIR / 'p2rank_2.5.1'
 
 MODEL_FILES = ["3B-model.pt", "smoother.pt"]
 MODELS_URL_DEFAULT = "https://owncloud.cesnet.cz/index.php/f/676508323"
 PRANKWEB_URL_DEFAULT = "https://prankweb.cz/www/prankweb/PDBe-p2rank-2.4-conservation-hmm.tar.gz"
 PRANKWEB_LOCAL_DEFAULT = Path("/scratch/tmp/lopatkao/bachelor/prankweb.tar.gz")
 PRANKWEB_EXTRACT_DEFAULT = Path("/scratch/tmp/lopatkao/bachelor/prankweb")
+P2RANK_URL_DEFAULT = "https://github.com/rdk/p2rank/releases/download/2.5.1/p2rank_2.5.1.tar.gz"
 RCSB_BASE = "https://files.rcsb.org/download"
 
 
@@ -84,6 +93,33 @@ def stage_models(url, dest_dir):
                   "manual extraction may be required.")
     except Exception as e:
         print(f"[1/5 models] auto-download failed ({e}); please place models manually.")
+
+
+# ---------- 1b. P2Rank install ----------
+
+def stage_p2rank(url, dest_dir):
+    """Download and extract the P2Rank tool. Verifies the prank script exists."""
+    prank_script = dest_dir / "prank"
+    if prank_script.exists():
+        print(f"[1b/5 p2rank] already installed at {dest_dir}, skipping")
+        return
+    TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+    tarball = TOOLS_DIR / Path(url).name
+    if not tarball.exists():
+        print(f"[1b/5 p2rank] downloading {url}")
+        run(["wget", "-c", "--tries=20", "--timeout=60", "--waitretry=10",
+             "-O", str(tarball), url])
+    print(f"[1b/5 p2rank] extracting into {TOOLS_DIR}")
+    run(["tar", "-xzf", str(tarball), "-C", str(TOOLS_DIR)])
+    if not prank_script.exists():
+        print(f"[1b/5 p2rank] WARNING: expected {prank_script} after extraction; "
+              "the tarball may have a different layout. Adjust P2RANK_DIR or set P2RANK_BIN.")
+        return
+    prank_script.chmod(prank_script.stat().st_mode | 0o111)
+    if shutil.which("java") is None:
+        print("[1b/5 p2rank] WARNING: 'java' not on PATH. P2Rank requires Java 17+ at runtime.")
+    else:
+        print(f"[1b/5 p2rank] installed: {prank_script}")
 
 
 # ---------- 2. Prankweb tarball ----------
@@ -221,8 +257,11 @@ def main():
     ap.add_argument("--prankweb-url", default=PRANKWEB_URL_DEFAULT)
     ap.add_argument("--prankweb-tarball", type=Path, default=PRANKWEB_LOCAL_DEFAULT)
     ap.add_argument("--prankweb-extract", type=Path, default=PRANKWEB_EXTRACT_DEFAULT)
+    ap.add_argument("--p2rank-url", default=P2RANK_URL_DEFAULT)
     ap.add_argument("--pdb-threads", type=int, default=8)
     ap.add_argument("--skip-models", action="store_true")
+    ap.add_argument("--skip-p2rank", action="store_true",
+                    help="Skip P2Rank tool install (stage 1b)")
     ap.add_argument("--skip-prankweb", action="store_true")
     ap.add_argument("--skip-pdbs", action="store_true")
     ap.add_argument("--skip-p2r-extract", action="store_true")
@@ -236,21 +275,28 @@ def main():
     if not args.skip_models:
         stage_models(args.models_url, MODELS_DIR)
 
+    if not args.skip_p2rank:
+        stage_p2rank(args.p2rank_url, P2RANK_DIR)
+
     if not args.skip_prankweb:
         stage_prankweb(args.prankweb_url, args.prankweb_tarball, args.prankweb_extract)
 
-    if args.pdb_list == "none":
-        print("[scope] --pdb-list none: skipping PDB download and P2Rank extraction")
-        sys.exit(0)
-    elif args.pdb_list:
+    if args.pdb_list is None:
+        print("[scope] no --pdb-list given: skipping PDB download and P2Rank extraction")
+        print("        (step 0 has finished installing models + P2Rank tool"
+              + (" + prankweb tarball" if not args.skip_prankweb else "") + ")")
+        print(f"\nSetup complete.")
+        return
+
+    if args.pdb_list == "all":
+        if not args.prankweb_extract.exists():
+            sys.exit("Cannot resolve --pdb-list all — prankweb tree missing. "
+                     "Re-run without --skip-prankweb, or pass an explicit --pdb-list <file>.")
+        pdb_ids = list_prankweb_pdbs(args.prankweb_extract)
+        print(f"[scope] --pdb-list all: {len(pdb_ids):,} PDBs available in prankweb")
+    else:
         pdb_ids = load_pdb_list(Path(args.pdb_list))
         print(f"[scope] {len(pdb_ids):,} PDB IDs from {args.pdb_list}")
-    else:
-        if not args.prankweb_extract.exists():
-            sys.exit("Cannot determine 'all available' PDBs — prankweb tree missing. "
-                     "Re-run without --skip-prankweb, or pass --pdb-list explicitly.")
-        pdb_ids = list_prankweb_pdbs(args.prankweb_extract)
-        print(f"[scope] using all {len(pdb_ids):,} PDBs available in prankweb")
 
     if not args.skip_pdbs:
         stage_pdbs(pdb_ids, PDB_DIR, args.pdb_threads)

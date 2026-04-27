@@ -24,13 +24,21 @@ import numpy as np
 from transformers import EsmModel
 import torch.nn as nn
 from pathlib import Path
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
 ROOT     = Path(__file__).parent.parent.parent.parent
 MODEL_PATH = ROOT / 'data' / 'models' / '3B-model.pt'
 FASTA_DIR  = ROOT / 'data' / 'intermediate' / 'fastas'  # Read from main fastas directory
 out_dir    = ROOT / 'data' / 'intermediate' / 'predictions'
 emb_dir    = ROOT / 'data' / 'intermediate' / 'embeddings'
+P2R_DIR    = ROOT / 'data' / 'input' / 'P2Rank'
+DS_PATH    = ROOT / 'data' / 'intermediate' / 'p2rank_dataset.ds'
+P2RANK_BIN = Path(os.environ.get(
+    "P2RANK_BIN", str(ROOT / 'data' / 'tools' / 'p2rank_2.5.1' / 'prank')))
 sys.path.append(str(ROOT / 'src' / 'utilities'))
 
 DROPOUT = 0.3
@@ -249,5 +257,69 @@ for fasta_file in fasta_files:
         print(f"  Saved embeddings to: {emb_dir / f'{fasta_stem}_embeddings.npy'}\n")
 
 print(f"\n{'='*60}")
-print(f"Prediction complete!")
+print(f"S2P prediction complete.")
+print(f"{'='*60}")
+
+
+# ---------------- P2Rank batch step ----------------
+
+def _ds_count(ds_path):
+    """Count non-header, non-empty lines in a P2Rank .ds file."""
+    if not ds_path.exists():
+        return 0
+    n = 0
+    with open(ds_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("HEADER:") or line.startswith("PARAM."):
+                continue
+            n += 1
+    return n
+
+
+def run_p2rank_batch(ds_path, p2r_dir, prank_bin):
+    """Invoke P2Rank once on the dataset and copy outputs into p2r_dir."""
+    p2r_dir.mkdir(parents=True, exist_ok=True)
+    if not prank_bin.exists():
+        print(f"  [P2R] prank binary not found at {prank_bin}")
+        print(f"  [P2R] set P2RANK_BIN env var or run step 0 to install P2Rank")
+        return
+    with tempfile.TemporaryDirectory(prefix="p2r_run_") as tmp:
+        tmp = Path(tmp)
+        cmd = [str(prank_bin), "predict", "-l", str(ds_path), "-o", str(tmp)]
+        print(f"  $ {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"  [P2R] prank exited with status {e.returncode}; partial outputs (if any) will still be copied")
+
+        # P2Rank writes per-input output files like <input_basename>_predictions.csv
+        # somewhere under the output dir. Walk recursively and rename to canonical.
+        copied_pred = copied_res = 0
+        for pred_src in tmp.rglob("*_predictions.csv"):
+            stem = pred_src.stem.replace("_predictions", "")  # e.g. "pdb1abc.pdb" or "pdb1abc"
+            pdb_id = Path(stem).stem  # strip ".pdb" if present
+            target_pred = p2r_dir / f"{pdb_id}_predictions.csv"
+            shutil.copy2(pred_src, target_pred)
+            copied_pred += 1
+            res_src = pred_src.with_name(pred_src.name.replace("_predictions.csv",
+                                                                 "_residues.csv"))
+            if res_src.exists():
+                shutil.copy2(res_src, p2r_dir / f"{pdb_id}_residues.csv")
+                copied_res += 1
+        print(f"  [P2R] copied {copied_pred} predictions / {copied_res} residue files -> {p2r_dir}")
+
+
+print(f"\n{'='*60}")
+print(f"P2Rank batch prediction")
+print(f"{'='*60}")
+n_needing = _ds_count(DS_PATH)
+print(f"  Dataset: {DS_PATH}  ({n_needing} PDBs needing prediction)")
+if n_needing == 0:
+    print(f"  Nothing to do — all PDBs already have P2Rank predictions in {P2R_DIR}")
+else:
+    run_p2rank_batch(DS_PATH, P2R_DIR, P2RANK_BIN)
+
+print(f"\n{'='*60}")
+print(f"All predictions complete.")
 print(f"{'='*60}")
