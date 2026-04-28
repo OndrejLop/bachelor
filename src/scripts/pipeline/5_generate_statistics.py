@@ -10,8 +10,11 @@ This script analyzes outputs from previous pipeline steps:
 Input:
   - P2Rank predictions:    data/input/P2Rank/{pdb_id}_predictions.csv
   - Seq2Pocket predictions: data/output/Seq2Pockets/{pdb_id}_predictions.csv
-  - Comparison results:    data/output/results/novel_s2p_pockets.csv
-                           data/output/results/p2r_unique_pockets.csv
+  - Comparison results:    data/output/results/[run_dir]/novel_s2p_pockets.csv
+                           data/output/results/[run_dir]/p2r_unique_pockets.csv
+                           (or flat data/output/results/novel_s2p_pockets.csv
+                            and data/output/results/p2r_unique_pockets.csv
+                            in legacy layout)
   - Clustering skip logs:  data/output/Seq2Pockets/**/skipped_clustering.txt (aggregated)
 
 Output:
@@ -52,6 +55,11 @@ ROOT = Path(__file__).parent.parent.parent.parent
 parser = argparse.ArgumentParser(description="Generate statistics and plots from pipeline results")
 parser.add_argument("--timestamp", action="store_true",
                     help="Write analysis output into a timestamped subdir of data/output/analysis/")
+parser.add_argument("--results-dir", type=Path, default=None,
+                    help="Specific comparison-results subdirectory under data/output/results/ "
+                         "to analyze, e.g. 20260427_120000_max_res0_pct0. "
+                         "Absolute paths are also accepted. Default: auto-select flat results/ "
+                         "or the newest timestamped run.")
 parser.add_argument("--exclude-file", type=Path,
                     default=Path("data/output/analysis/excluded_pdbs.txt"),
                     help="Path to text file listing pdb_ids to exclude (one per line, # comments). "
@@ -59,17 +67,32 @@ parser.add_argument("--exclude-file", type=Path,
                          "Pass an empty path to disable.")
 args = parser.parse_args()
 
-P2RANK_DIR  = ROOT / 'data' / 'input' / 'P2Rank'
-S2P_DIR     = ROOT / 'data' / 'output' / 'Seq2Pockets'
-RESULTS_DIR = ROOT / 'data' / 'output' / 'results'
-PDB_DIR     = ROOT / 'data' / 'input' / 'pdb'
-FASTA_DIR   = ROOT / 'data' / 'intermediate' / 'fastas'
-PRED_DIR    = ROOT / 'data' / 'intermediate' / 'predictions'
+P2RANK_DIR   = ROOT / 'data' / 'input' / 'P2Rank'
+S2P_DIR      = ROOT / 'data' / 'output' / 'Seq2Pockets'
+RESULTS_ROOT = ROOT / 'data' / 'output' / 'results'
+PDB_DIR      = ROOT / 'data' / 'input' / 'pdb'
+FASTA_DIR    = ROOT / 'data' / 'intermediate' / 'fastas'
+PRED_DIR     = ROOT / 'data' / 'intermediate' / 'predictions'
+
+def _latest_step4_param_suffix(results_root):
+    """Pick the param suffix (e.g. 'max_res0_pct0') from the most recent
+    timestamped step-4 subdir, or '' if none found."""
+    if not results_root.exists():
+        return ""
+    for d in sorted([x for x in results_root.iterdir()
+                     if x.is_dir() and not x.name.lower().startswith("pdb")],
+                    reverse=True):
+        idx = d.name.find("max_res")
+        if idx >= 0:
+            return d.name[idx:]
+    return ""
+
 
 analysis_base = ROOT / 'data' / 'output' / 'analysis'
 if args.timestamp:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    STATS_DIR = analysis_base / timestamp
+    suffix = _latest_step4_param_suffix(RESULTS_ROOT)
+    STATS_DIR = analysis_base / (f"{timestamp}_{suffix}" if suffix else timestamp)
 else:
     STATS_DIR = analysis_base
 PLOTS_DIR = STATS_DIR / 'plots'
@@ -90,17 +113,49 @@ def _load_exclusions(path):
     return excluded
 
 
+def _find_novel_dir(results_dir: Path) -> Path | None:
+    """Locate the directory containing novel_s2p_pockets.csv. Tries the flat
+    layout first, then falls back to the most recent timestamped subdir."""
+    if (results_dir / "novel_s2p_pockets.csv").exists():
+        return results_dir
+    if not results_dir.exists():
+        return None
+    timestamped = sorted([d for d in results_dir.iterdir()
+                          if d.is_dir() and not d.name.lower().startswith("pdb")],
+                         reverse=True)
+    for d in timestamped:
+        if (d / "novel_s2p_pockets.csv").exists():
+            return d
+    return None
+
+
+def _resolve_results_dir(path: Path | None) -> Path | None:
+    """Resolve the comparison-results directory to analyze."""
+    if path is None:
+        return _find_novel_dir(RESULTS_ROOT)
+
+    candidate = path if path.is_absolute() else RESULTS_ROOT / path
+    candidate = candidate.resolve()
+    if not candidate.exists():
+        parser.error(f"--results-dir does not exist: {candidate}")
+    if not candidate.is_dir():
+        parser.error(f"--results-dir is not a directory: {candidate}")
+    return candidate
+
+
 exclude_path = args.exclude_file
 if exclude_path is not None and not exclude_path.is_absolute():
     exclude_path = ROOT / exclude_path
 EXCLUDED_PDBS = _load_exclusions(exclude_path)
+SELECTED_RESULTS_DIR = _resolve_results_dir(args.results_dir)
 
 print(f"\n{'='*60}")
 print(f"Statistics Generation Parameters:")
 print(f"{'='*60}")
 print(f"Seq2Pocket dir:  {S2P_DIR}")
 print(f"P2Rank dir:      {P2RANK_DIR}")
-print(f"Results dir:     {RESULTS_DIR}")
+print(f"Results root:    {RESULTS_ROOT}")
+print(f"Results dir:     {SELECTED_RESULTS_DIR if SELECTED_RESULTS_DIR else '(auto: not found)'}")
 print(f"Output dir:      {STATS_DIR}")
 print(f"Exclude file:    {exclude_path if exclude_path else '(none)'}")
 print(f"Excluded PDBs:   {len(EXCLUDED_PDBS)}")
@@ -255,29 +310,12 @@ def _violin_box(ax, datasets, labels, colors, ylabel, use_log2=False):
 # 1. Pipeline funnel
 # ============================================================
 
-def _find_novel_dir(results_dir: Path) -> Path | None:
-    """Locate the directory containing novel_s2p_pockets.csv. Tries the flat
-    layout first, then falls back to the most recent timestamped subdir."""
-    if (results_dir / "novel_s2p_pockets.csv").exists():
-        return results_dir
-    if not results_dir.exists():
-        return None
-    timestamped = sorted([d for d in results_dir.iterdir()
-                          if d.is_dir() and not d.name.lower().startswith("pdb")],
-                         reverse=True)
-    for d in timestamped:
-        if (d / "novel_s2p_pockets.csv").exists():
-            return d
-    return None
-
-
 def _load_novel_csv(filename: str, apply_exclusions: bool = True) -> pd.DataFrame | None:
-    """Load a novel/unique pocket CSV from RESULTS_DIR (or its newest
-    timestamped run). Returns None if not found."""
-    base = _find_novel_dir(RESULTS_DIR)
-    if base is None:
+    """Load a novel/unique pocket CSV from the selected results directory.
+    Returns None if not found."""
+    if SELECTED_RESULTS_DIR is None:
         return None
-    path = base / filename
+    path = SELECTED_RESULTS_DIR / filename
     if not path.exists():
         return None
     try:
@@ -1451,8 +1489,12 @@ def run_classification_analysis(out, plots_dir, results_dir,
         out.write("  Run tool 14 (classify_pdbs) and/or tool 15 (--make) first.\n\n")
         return
 
-    if _find_novel_dir(results_dir) is None:
-        out.write(f"  Skipped — no novel_s2p_pockets.csv found under {results_dir}\n\n")
+    if results_dir is None:
+        out.write(f"  Skipped — no novel_s2p_pockets.csv found under {RESULTS_ROOT}\n\n")
+        return
+
+    if not (results_dir / "novel_s2p_pockets.csv").exists():
+        out.write(f"  Skipped — no novel_s2p_pockets.csv found in {results_dir}\n\n")
         return
 
     classification = _load_classification(classification_csv)
@@ -1565,7 +1607,7 @@ if __name__ == "__main__":
                       if p2r_pp is not None else {})
         s2p_totals = (dict(zip(s2p_pp["pdb_id"], s2p_pp["n_pockets"]))
                       if s2p_pp is not None else {})
-        run_classification_analysis(out, PLOTS_DIR, RESULTS_DIR,
+        run_classification_analysis(out, PLOTS_DIR, SELECTED_RESULTS_DIR,
                                     lengths=lengths,
                                     p2r_totals=p2r_totals, s2p_totals=s2p_totals)
 

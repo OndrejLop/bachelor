@@ -3,6 +3,7 @@
 /src/scripts/cluster_pockets.log
 /src/scripts/00_filter_fastas.py
 .DS_Store
+CLAUDE.md
 
 # Python bytecode
 __pycache__/
