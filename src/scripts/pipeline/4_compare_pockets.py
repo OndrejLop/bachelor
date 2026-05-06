@@ -30,18 +30,27 @@ parser.add_argument("--max-overlap-residues", type=int, default=0,
                     help="Maximum overlapping residues to still consider pocket unique (default: 0)")
 parser.add_argument("--max-overlap-percent", type=float, default=0,
                     help="Maximum overlap percentage to consider pocket unique, 0-100 (default: 0=disabled)")
+parser.add_argument("--min-pocket-size", type=int, default=3,
+                    help="Drop pockets with fewer than this many residues before comparison (default: 3)")
+parser.add_argument("--max-pocket-size", type=int, default=70,
+                    help="Drop pockets with more than this many residues before comparison (default: 70)")
 parser.add_argument("--timestamp", action="store_true",
                     help="Add timestamp to output directory (prevents overwrites)")
 parser.add_argument("--resume-after", type=str, default=None,
                     help="Skip PDB IDs up to and including this one (resume from next)")
 args = parser.parse_args()
 
+if args.min_pocket_size > args.max_pocket_size:
+    parser.error(f"--min-pocket-size ({args.min_pocket_size}) must be <= --max-pocket-size ({args.max_pocket_size})")
+
 def load_pockets(csv_path):
     """
     Load pocket definitions from CSV file.
 
     Converts residue_ids column (space-separated chain_residue pairs like "A_101 B_45")
-    into frozensets for efficient overlap detection.
+    into frozensets for efficient overlap detection. Pockets whose residue count
+    falls outside [args.min_pocket_size, args.max_pocket_size] are dropped here,
+    so they never participate in the overlap comparison.
 
     Args:
         csv_path (str): Path to predictions CSV
@@ -54,7 +63,9 @@ def load_pockets(csv_path):
     df["residue_set"] = df["residue_ids"].apply(
         lambda x: frozenset(x.strip().split()) if pd.notna(x) else frozenset()
     )
-    return df
+    sizes = df["residue_set"].map(len)
+    in_range = (sizes >= args.min_pocket_size) & (sizes <= args.max_pocket_size)
+    return df[in_range].reset_index(drop=True)
 
 def find_unmatched(source_df, target_df):
     """
@@ -183,7 +194,9 @@ base_out_dir = ROOT / 'data' / 'output' / 'results'
 # --- Create output directory with optional timestamp ---
 if args.timestamp:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    param_suffix = f"max_res{args.max_overlap_residues}_pct{args.max_overlap_percent}"
+    param_suffix = (f"max_res{args.max_overlap_residues}"
+                    f"_pct{args.max_overlap_percent}"
+                    f"_size{args.min_pocket_size}-{args.max_pocket_size}")
     out_base_dir = base_out_dir / f"{timestamp}_{param_suffix}"
 else:
     out_base_dir = base_out_dir
@@ -195,6 +208,8 @@ run_metadata = {
     "timestamp": datetime.now().isoformat(),
     "max_overlap_residues": args.max_overlap_residues,
     "max_overlap_percent": args.max_overlap_percent,
+    "min_pocket_size": args.min_pocket_size,
+    "max_pocket_size": args.max_pocket_size,
     "output_dir": str(out_base_dir),
 }
 metadata_path = out_base_dir / "run_metadata.json"
@@ -206,6 +221,7 @@ print(f"Pocket Comparison Run Parameters:")
 print(f"{'='*60}")
 print(f"Max overlap residues: {args.max_overlap_residues}")
 print(f"Max overlap percent:  {args.max_overlap_percent}%")
+print(f"Pocket size bounds:   [{args.min_pocket_size}, {args.max_pocket_size}] residues")
 print(f"Output directory:     {out_base_dir}")
 print(f"Metadata saved:       {metadata_path}")
 print(f"{'='*60}\n")
