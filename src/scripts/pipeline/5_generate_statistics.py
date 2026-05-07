@@ -22,6 +22,7 @@ Output:
   - data/output/analysis/plots/*.png
 """
 import argparse
+import json
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -65,6 +66,12 @@ parser.add_argument("--exclude-file", type=Path,
                     help="Path to text file listing pdb_ids to exclude (one per line, # comments). "
                          "Default: data/output/analysis/excluded_pdbs.txt (silently no-op if missing). "
                          "Pass an empty path to disable.")
+parser.add_argument("--min-pocket-size", type=int, default=None,
+                    help="Drop pockets with fewer than this many residues from all stats and plots. "
+                         "Default: from {results_dir}/run_metadata.json or 3.")
+parser.add_argument("--max-pocket-size", type=int, default=None,
+                    help="Drop pockets with more than this many residues from all stats and plots. "
+                         "Default: from {results_dir}/run_metadata.json or 70.")
 args = parser.parse_args()
 
 P2RANK_DIR   = ROOT / 'data' / 'input' / 'P2Rank'
@@ -149,6 +156,28 @@ if exclude_path is not None and not exclude_path.is_absolute():
 EXCLUDED_PDBS = _load_exclusions(exclude_path)
 SELECTED_RESULTS_DIR = _resolve_results_dir(args.results_dir)
 
+
+def _resolve_pocket_size_bounds(results_dir: Path | None) -> tuple[int, int]:
+    """Use CLI overrides when given; otherwise read from
+    {results_dir}/run_metadata.json; otherwise fall back to 3..70 (the
+    defaults step 4 and tool 18 use)."""
+    meta = {}
+    if results_dir is not None:
+        meta_path = results_dir / "run_metadata.json"
+        if meta_path.is_file():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except json.JSONDecodeError:
+                print(f"  [WARN] {meta_path} is not valid JSON; ignoring")
+    lo = args.min_pocket_size if args.min_pocket_size is not None else meta.get("min_pocket_size", 3)
+    hi = args.max_pocket_size if args.max_pocket_size is not None else meta.get("max_pocket_size", 70)
+    if lo > hi:
+        parser.error(f"--min-pocket-size ({lo}) must be <= --max-pocket-size ({hi})")
+    return lo, hi
+
+
+MIN_POCKET_SIZE, MAX_POCKET_SIZE = _resolve_pocket_size_bounds(SELECTED_RESULTS_DIR)
+
 print(f"\n{'='*60}")
 print(f"Statistics Generation Parameters:")
 print(f"{'='*60}")
@@ -159,6 +188,7 @@ print(f"Results dir:     {SELECTED_RESULTS_DIR if SELECTED_RESULTS_DIR else '(au
 print(f"Output dir:      {STATS_DIR}")
 print(f"Exclude file:    {exclude_path if exclude_path else '(none)'}")
 print(f"Excluded PDBs:   {len(EXCLUDED_PDBS)}")
+print(f"Pocket size:     [{MIN_POCKET_SIZE}, {MAX_POCKET_SIZE}] residues")
 print(f"{'='*60}\n")
 
 # ============================================================
@@ -203,14 +233,18 @@ def files_by_pdb(directory, pattern, strip_suffix=""):
     return out
 
 def load_pocket_csv(csv_path):
-    """Load a pocket predictions CSV and parse residue lists."""
+    """Load a pocket predictions CSV and parse residue lists. Pockets whose
+    residue count falls outside [MIN_POCKET_SIZE, MAX_POCKET_SIZE] are dropped
+    here so they never appear in any downstream stat or plot — keeping step 5
+    consistent with what step 4 actually compared."""
     df = pd.read_csv(csv_path, skipinitialspace=True)
     df.columns = df.columns.str.strip()
     df["residue_list"] = df["residue_ids"].apply(
         lambda x: x.strip().split() if pd.notna(x) else []
     )
     df["pocket_size"] = df["residue_list"].apply(len)
-    return df
+    in_range = (df["pocket_size"] >= MIN_POCKET_SIZE) & (df["pocket_size"] <= MAX_POCKET_SIZE)
+    return df[in_range].reset_index(drop=True)
 
 def collect_pocket_stats(predictions_dir, file_pattern):
     """
