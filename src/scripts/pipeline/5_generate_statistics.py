@@ -1504,6 +1504,130 @@ def plot_class_delta(stats: pd.DataFrame, out_path: Path):
     plt.close(fig)
 
 
+def run_sasa_analysis(out, plots_dir, stats_dir, results_dir,
+                      p2r_dir, s2p_dir, pdb_dir,
+                      min_pocket_size=None, max_pocket_size=None,
+                      probe_radius=1.4, n_points=100, neighbor_radius=10.0,
+                      limit=None):
+    """SASA + protrusion analysis per pocket category. Delegates the heavy
+    lifting to tool 18 (loaded by file path because its module name starts
+    with a digit). Skips with a notice if prerequisites are missing."""
+    out.write("=" * 60 + "\n")
+    out.write("7. SASA / PROTRUSION ANALYSIS (per pocket category)\n")
+    out.write("=" * 60 + "\n\n")
+
+    if results_dir is None:
+        out.write(f"  Skipped — no resolved step-4 results dir.\n\n")
+        return
+    if not p2r_dir.is_dir():
+        out.write(f"  Skipped — P2R dir not found: {p2r_dir}\n\n")
+        return
+    if not pdb_dir.is_dir():
+        out.write(f"  Skipped — PDB dir not found: {pdb_dir}\n\n")
+        return
+
+    tool18_path = ROOT / 'src' / 'scripts' / 'tools' / '18_pocket_sasa.py'
+    if not tool18_path.exists():
+        out.write(f"  Skipped — tool 18 not found at {tool18_path}\n\n")
+        return
+
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tool18", tool18_path)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as e:
+        out.write(f"  Skipped — failed to load tool 18: {e}\n\n")
+        return
+
+    lo = min_pocket_size if min_pocket_size is not None else 3
+    hi = max_pocket_size if max_pocket_size is not None else 70
+    out.write(f"  Pocket size bounds: [{lo}, {hi}]\n")
+    out.write(f"  Probe radius {probe_radius} Å, n_points {n_points}, "
+              f"neighbor radius {neighbor_radius} Å\n")
+
+    s2p_lookup = {}
+    for f in s2p_dir.rglob("*_predictions.csv"):
+        pid = f.stem.replace('_predictions', '')
+        s2p_lookup.setdefault(pid, f)
+
+    pdb_ids = []
+    for p2r_csv in sorted(p2r_dir.glob("*_predictions.csv")):
+        pid = p2r_csv.stem.replace('_predictions', '')
+        if pid in s2p_lookup and pid not in EXCLUDED_PDBS:
+            pdb_ids.append(pid)
+    if limit:
+        pdb_ids = pdb_ids[:limit]
+    out.write(f"  PDBs with both P2R and S2P predictions: {len(pdb_ids)}\n")
+
+    rows = []
+    n_no_pdb = n_failed = 0
+    for i, pid in enumerate(pdb_ids, 1):
+        pdb_path = mod.find_pdb_file(pdb_dir, pid)
+        if pdb_path is None:
+            n_no_pdb += 1
+            continue
+        try:
+            new_rows = mod.categorize_pdb(
+                pid, p2r_dir / f"{pid}_predictions.csv", s2p_lookup[pid],
+                pdb_path, results_dir,
+                lo, hi, probe_radius, n_points, neighbor_radius,
+            )
+            rows.extend(new_rows)
+        except Exception as e:
+            n_failed += 1
+            print(f"  [WARN] sasa {pid}: {e}")
+        if i % 100 == 0 or i == len(pdb_ids):
+            print(f"  [SASA] {i}/{len(pdb_ids)} processed ({len(rows)} pockets)")
+
+    out.write(f"  Skipped (no PDB):    {n_no_pdb}\n")
+    out.write(f"  Failed:              {n_failed}\n")
+    out.write(f"  Pockets categorized: {len(rows)}\n")
+    if not rows:
+        out.write("  No pockets — nothing to plot.\n\n")
+        return
+
+    sasa_dir = stats_dir / 'sasa'
+    sasa_dir.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame(rows)
+    df.to_csv(sasa_dir / 'pocket_metrics.csv', index=False)
+    out.write(f"  Wrote pocket_metrics.csv ({len(df)} rows)\n")
+
+    sasa_label = 'SASA / residue (Å²)'
+    nbr_label = f'mean neighbors within {neighbor_radius:g} Å of CA'
+    metrics = [('sasa_per_residue', sasa_label),
+               ('mean_neighbors', nbr_label)]
+    summary_text = mod.write_summary(df, metrics, sasa_dir / 'metrics_summary.txt')
+    out.write("\n")
+    out.write(summary_text)
+    out.write("\n")
+
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    mod.plot_distributions(df, 'sasa_per_residue', sasa_label,
+                           'SASA / residue distribution by pocket category',
+                           plots_dir / 'sasa_distributions.png')
+    mod.plot_violin(df, 'sasa_per_residue', sasa_label,
+                    'SASA / residue per pocket category',
+                    plots_dir / 'sasa_violin.png')
+    mod.plot_box(df, 'sasa_per_residue', sasa_label,
+                 'SASA / residue per pocket category',
+                 plots_dir / 'sasa_box.png')
+    mod.plot_distributions(df, 'mean_neighbors', nbr_label,
+                           'Pocket protrusion (mean CA neighbor count) by category',
+                           plots_dir / 'protrusion_distributions.png')
+    mod.plot_violin(df, 'mean_neighbors', nbr_label,
+                    'Pocket protrusion per category',
+                    plots_dir / 'protrusion_violin.png')
+    mod.plot_box(df, 'mean_neighbors', nbr_label,
+                 'Pocket protrusion per category',
+                 plots_dir / 'protrusion_box.png')
+    mod.plot_scatter(df, 'sasa_per_residue', 'mean_neighbors',
+                     sasa_label, nbr_label,
+                     'SASA / residue vs protrusion (mean neighbor count)',
+                     plots_dir / 'sasa_vs_protrusion.png')
+    out.write("  Wrote 7 SASA plots (sasa_*, protrusion_*, sasa_vs_protrusion)\n\n")
+
+
 def run_classification_analysis(out, plots_dir, results_dir,
                                 lengths=None, p2r_totals=None, s2p_totals=None):
     """Per-class S2P-vs-P2R analysis. Skips with a notice if any required
@@ -1645,7 +1769,13 @@ if __name__ == "__main__":
                                     lengths=lengths,
                                     p2r_totals=p2r_totals, s2p_totals=s2p_totals)
 
-        # 7. Summary table
+        # 7. SASA / protrusion analysis (delegates to tool 18)
+        run_sasa_analysis(out, PLOTS_DIR, STATS_DIR, SELECTED_RESULTS_DIR,
+                          P2RANK_DIR, S2P_DIR, PDB_DIR,
+                          min_pocket_size=MIN_POCKET_SIZE,
+                          max_pocket_size=MAX_POCKET_SIZE)
+
+        # 8. Summary table
         summary_table(funnel, method_stats, novel_stats, out)
 
     print(f"Statistics written to: {summary_path}")
