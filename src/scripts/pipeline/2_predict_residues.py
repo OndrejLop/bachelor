@@ -91,7 +91,7 @@ KEEP_END = 500    # Keep last N residues from last window
 
 from Bio import SeqIO
 
-finetuned_model = torch.load(MODEL_PATH, weights_only=False)
+finetuned_model = torch.load(MODEL_PATH, weights_only=False, map_location='cpu')
 finetuned_model.__class__ = MultitaskFinetunedEsmModel
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 finetuned_model = finetuned_model.to(device)
