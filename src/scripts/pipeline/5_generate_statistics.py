@@ -436,8 +436,6 @@ def plot_funnel(funnel, out_path):
             x = stage_idx + off
             ax.bar(x, count, width=bar_width, color=color,
                    edgecolor='black', label=label)
-            ax.text(x, count, f'{count:,}',
-                    ha='center', va='bottom', fontsize=10, fontweight='bold')
         xticks.append(stage_idx)
 
     ax.set_xticks(xticks)
@@ -723,7 +721,7 @@ def plot_novel_pockets(results, out_dir):
 # 6. Summary table
 # ============================================================
 
-def summary_table(funnel, method_stats, novel_stats, out):
+def summary_table(funnel, method_stats, novel_stats, out, comparable_stats=None):
     out.write("=" * 60 + "\n")
     out.write("6. SUMMARY TABLE\n")
     out.write("=" * 60 + "\n\n")
@@ -755,6 +753,17 @@ def summary_table(funnel, method_stats, novel_stats, out):
     row("Mean pocket size (residues)",
         f"{np.mean(s2p['pocket_sizes']):.2f}" if s2p else None,
         f"{np.mean(p2r['pocket_sizes']):.2f}" if p2r else None)
+
+    if comparable_stats:
+        row("Comparable proteins with both methods",
+            comparable_stats.get("n_proteins"),
+            comparable_stats.get("n_proteins"))
+        row("Comparable pockets total (Seq2Pocket)",
+            comparable_stats.get("total_s2p_pockets"),
+            None)
+        row("Comparable pockets total (P2Rank)",
+            None,
+            comparable_stats.get("total_p2r_pockets"))
 
     s2p_novel = novel_stats.get("Seq2Pocket-unique")
     p2r_novel = novel_stats.get("P2Rank-unique")
@@ -1279,6 +1288,7 @@ def _per_class_stats(classification: pd.DataFrame,
         mean_s2p_unique=("s2p_unique", "mean"),
         mean_p2r_unique=("p2r_unique", "mean"),
         total_s2p_unique=("s2p_unique", "sum"),
+        total_p2r_unique=("p2r_unique", "sum"),
         total_s2p_total=("s2p_total", "sum"),
         total_p2r_total=("p2r_total", "sum"),
         total_seq_length=("seq_length", "sum"),
@@ -1293,6 +1303,8 @@ def _per_class_stats(classification: pd.DataFrame,
         grouped["total_s2p_unique"] / grouped["total_p2r_total"].replace(0, np.nan))
     grouped["s2p_novelty_rate"] = (
         grouped["total_s2p_unique"] / grouped["total_s2p_total"].replace(0, np.nan))
+    grouped["p2r_novelty_rate"] = (
+        grouped["total_p2r_unique"] / grouped["total_p2r_total"].replace(0, np.nan))
 
     sizes_per_class = df.groupby(group_col)["s2p_sizes"].apply(
         lambda series: [s for sublist in series for s in sublist]).to_dict()
@@ -1309,6 +1321,7 @@ def _collapse_long_tail(stats: pd.DataFrame, top_n: int) -> pd.DataFrame:
     tail = stats.iloc[top_n:]
     other_n = int(tail["n_proteins"].sum())
     total_s2p = int(tail["total_s2p_unique"].sum())
+    total_p2r_unique = int(tail["total_p2r_unique"].sum())
     total_s2p_all = int(tail["total_s2p_total"].sum())
     total_p2r = int(tail["total_p2r_total"].sum())
     total_len = int(tail["total_seq_length"].sum())
@@ -1320,6 +1333,7 @@ def _collapse_long_tail(stats: pd.DataFrame, top_n: int) -> pd.DataFrame:
         "mean_s2p_unique": float((tail["mean_s2p_unique"] * tail["n_proteins"]).sum() / max(other_n, 1)),
         "mean_p2r_unique": float((tail["mean_p2r_unique"] * tail["n_proteins"]).sum() / max(other_n, 1)),
         "total_s2p_unique": total_s2p,
+        "total_p2r_unique": total_p2r_unique,
         "total_s2p_total":  total_s2p_all,
         "total_p2r_total":  total_p2r,
         "total_seq_length": total_len,
@@ -1329,6 +1343,7 @@ def _collapse_long_tail(stats: pd.DataFrame, top_n: int) -> pd.DataFrame:
         "s2p_per_kresidue": (1000.0 * total_s2p / total_len) if total_len else float("nan"),
         "s2p_to_p2r_ratio": (total_s2p / total_p2r) if total_p2r else float("nan"),
         "s2p_novelty_rate": (total_s2p / total_s2p_all) if total_s2p_all else float("nan"),
+        "p2r_novelty_rate": (total_p2r_unique / total_p2r) if total_p2r else float("nan"),
     }])
     other["delta_rate"] = other["s2p_unique_rate"] - other["p2r_unique_rate"]
     return pd.concat([head, other], ignore_index=True)
@@ -1447,24 +1462,29 @@ def plot_class_s2p_per_residue(stats: pd.DataFrame, out_path: Path):
     plt.close(fig)
 
 
-def plot_class_s2p_novelty_rate(stats: pd.DataFrame, out_path: Path,
-                                title="S2P novelty rate by classification"):
-    """Bar chart: total_s2p_unique / total_s2p_total per class. Sorted desc.
-    Higher = more S2P pockets are unique to S2P (not overlapping with P2R)."""
-    sorted_df = stats.dropna(subset=["s2p_novelty_rate"]).sort_values(
+def plot_class_novel_pocket_ratio(stats: pd.DataFrame, out_path: Path,
+                                  title="Novel pocket ratio by classification"):
+    """Grouped bar chart: unique pockets / all pockets for both methods per class."""
+    sorted_df = stats.dropna(subset=["s2p_novelty_rate", "p2r_novelty_rate"]).sort_values(
         "s2p_novelty_rate", ascending=False).reset_index(drop=True)
     if sorted_df.empty:
         return
     fig, ax = plt.subplots(figsize=(max(8, 0.5 * len(sorted_df)), 5))
-    ax.bar(np.arange(len(sorted_df)), sorted_df["s2p_novelty_rate"],
-           color=S2P_COLOR, edgecolor='black')
+    x = np.arange(len(sorted_df))
+    width = 0.38
+    ax.bar(x - width / 2, sorted_df["s2p_novelty_rate"], width,
+           color=S2P_COLOR, edgecolor='black', label='Seq2Pocket')
+    ax.bar(x + width / 2, sorted_df["p2r_novelty_rate"], width,
+           color=P2R_COLOR, edgecolor='black', label='P2Rank')
     ax.set_xticks(np.arange(len(sorted_df)))
     ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
     ax.set_ylim(0, 1)
-    ax.set_ylabel("S2P-unique pockets  /  all S2P pockets")
+    ax.set_ylabel("Unique pockets  /  all pockets")
     ax.set_title(title)
-    for i, r in enumerate(sorted_df["s2p_novelty_rate"]):
-        ax.text(i, r, f"{r:.2f}", ha='center', va='bottom', fontsize=8)
+    ax.legend()
+    for i, (s2p_r, p2r_r) in enumerate(zip(sorted_df["s2p_novelty_rate"], sorted_df["p2r_novelty_rate"])):
+        ax.text(i - width / 2, s2p_r, f"{s2p_r:.2f}", ha='center', va='bottom', fontsize=8)
+        ax.text(i + width / 2, p2r_r, f"{p2r_r:.2f}", ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -1668,6 +1688,11 @@ def run_classification_analysis(out, plots_dir, results_dir,
     stats_csv.parent.mkdir(parents=True, exist_ok=True)
     stats.to_csv(stats_csv, index=False)
     out.write(f"  Per-class stats CSV: {stats_csv.name}  ({len(stats)} classes)\n")
+    out.write(
+        f"  Comparable proteins: {len(comparable)}; "
+        f"total pockets: S2P {int(stats['total_s2p_total'].sum())}, "
+        f"P2Rank {int(stats['total_p2r_total'].sum())}\n"
+    )
 
     plot_stats = _collapse_long_tail(stats, top_n=15)
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1681,7 +1706,7 @@ def run_classification_analysis(out, plots_dir, results_dir,
         plots_dir / "classification_s2p_per_protein.png")
     plot_class_s2p_per_residue(plot_stats, plots_dir / "classification_s2p_per_residue.png")
     plot_class_s2p_p2r_ratio(plot_stats, plots_dir / "classification_s2p_p2r_ratio.png")
-    plot_class_s2p_novelty_rate(plot_stats, plots_dir / "classification_s2p_novelty_rate.png")
+    plot_class_novel_pocket_ratio(plot_stats, plots_dir / "classification_s2p_novelty_rate.png")
     out.write(f"  Wrote 9 classification plots\n")
 
     # EC-class breakdown (enzymes only)
@@ -1698,11 +1723,17 @@ def run_classification_analysis(out, plots_dir, results_dir,
             lambda c: f"{c}: {EC_NAMES.get(str(c), 'Unknown')}")
         plot_class_total_s2p(ec_named, plots_dir / "ec_total_s2p_unique.png",
                              title="Total S2P-unique pockets by EC top-level class")
-        plot_class_s2p_novelty_rate(ec_named, plots_dir / "ec_s2p_novelty_rate.png",
-                                    title="S2P novelty rate by EC top-level class")
+        plot_class_novel_pocket_ratio(ec_named, plots_dir / "ec_s2p_novelty_rate.png",
+                           title="Novel pocket ratio by EC top-level class")
         out.write(f"  EC stats CSV: {ec_stats_csv.name}  ({len(ec_stats)} EC classes) "
                   f"+ ec_total_s2p_unique.png + ec_s2p_novelty_rate.png\n")
     out.write("\n")
+
+    return {
+        "n_proteins": int(len(comparable)),
+        "total_s2p_pockets": int(stats["total_s2p_total"].sum()),
+        "total_p2r_pockets": int(stats["total_p2r_total"].sum()),
+    }
 
 
 # ============================================================
@@ -1765,9 +1796,10 @@ if __name__ == "__main__":
                       if p2r_pp is not None else {})
         s2p_totals = (dict(zip(s2p_pp["pdb_id"], s2p_pp["n_pockets"]))
                       if s2p_pp is not None else {})
-        run_classification_analysis(out, PLOTS_DIR, SELECTED_RESULTS_DIR,
-                                    lengths=lengths,
-                                    p2r_totals=p2r_totals, s2p_totals=s2p_totals)
+        comparable_stats = run_classification_analysis(out, PLOTS_DIR, SELECTED_RESULTS_DIR,
+                                   lengths=lengths,
+                                   p2r_totals=p2r_totals,
+                                   s2p_totals=s2p_totals)
 
         # 7. SASA / protrusion analysis (delegates to tool 18)
         run_sasa_analysis(out, PLOTS_DIR, STATS_DIR, SELECTED_RESULTS_DIR,
@@ -1776,7 +1808,7 @@ if __name__ == "__main__":
                           max_pocket_size=MAX_POCKET_SIZE)
 
         # 8. Summary table
-        summary_table(funnel, method_stats, novel_stats, out)
+        summary_table(funnel, method_stats, novel_stats, out, comparable_stats=comparable_stats)
 
     print(f"Statistics written to: {summary_path}")
     print(f"Plots saved to:       {PLOTS_DIR}")
