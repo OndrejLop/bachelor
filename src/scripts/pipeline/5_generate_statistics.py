@@ -30,6 +30,8 @@ from datetime import datetime
 from collections import defaultdict, Counter
 import matplotlib
 matplotlib.use('Agg')
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
 import matplotlib.pyplot as plt
 
 plt.rcParams.update({
@@ -49,6 +51,15 @@ def _method_color(name):
     if 'p2r' in n or 'p2rank' in n:
         return P2R_COLOR
     return 'gray'
+
+
+def _savefig(fig, out_path: Path, dpi: int = 150):
+    """Save figure to PNG, PDF, and SVG subfolders under PLOTS_DIR."""
+    stem = out_path.stem
+    fig.savefig(PNG_DIR / f"{stem}.png", dpi=dpi, bbox_inches='tight')
+    fig.savefig(PDF_DIR / f"{stem}.pdf", dpi=dpi, bbox_inches='tight')
+    fig.savefig(SVG_DIR / f"{stem}.svg", dpi=dpi, bbox_inches='tight')
+
 
 ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -103,9 +114,13 @@ if args.timestamp:
 else:
     STATS_DIR = analysis_base
 PLOTS_DIR = STATS_DIR / 'plots'
+PNG_DIR   = PLOTS_DIR / 'png'
+PDF_DIR   = PLOTS_DIR / 'pdf'
+SVG_DIR   = PLOTS_DIR / 'svg'
 
 STATS_DIR.mkdir(parents=True, exist_ok=True)
-PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+for _d in (PNG_DIR, PDF_DIR, SVG_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
 
 
 def _load_exclusions(path):
@@ -316,6 +331,7 @@ def _violin_box(ax, datasets, labels, colors, ylabel, use_log2=False):
     for pc, color in zip(parts['bodies'], colors):
         pc.set_facecolor(color)
         pc.set_alpha(0.5)
+        pc.set_rasterized(True)
 
     bp = ax.boxplot(plot_data, positions=positions, widths=0.18,
                     patch_artist=True, showfliers=True,
@@ -445,7 +461,7 @@ def plot_funnel(funnel, out_path):
     ax.legend(fontsize=9, loc='upper right')
 
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 # ============================================================
@@ -518,7 +534,7 @@ def plot_pocket_distributions(results, out_dir, novel_stats=None):
         ax.set_ylabel("Number of Proteins", fontsize=12)
         ax.set_title(f"{method}: Pockets per Protein", fontsize=14)
         plt.tight_layout()
-        fig.savefig(out_dir / f"{label}_pockets_per_protein.png", dpi=150)
+        _savefig(fig, out_dir / f"{label}_pockets_per_protein.png")
         plt.close(fig)
 
         # Pocket size violin plot: all pockets + unique (if available)
@@ -540,7 +556,7 @@ def plot_pocket_distributions(results, out_dir, novel_stats=None):
                     "Pocket Size (residues)", use_log2=log2)
         ax.set_title(f"{method}: Pocket Size Distribution", fontsize=14)
         plt.tight_layout()
-        fig.savefig(out_dir / f"{label}_pocket_sizes.png", dpi=150)
+        _savefig(fig, out_dir / f"{label}_pocket_sizes.png")
         plt.close(fig)
 
     # Combined comparison: pockets per protein
@@ -558,7 +574,7 @@ def plot_pocket_distributions(results, out_dir, novel_stats=None):
         axes[0].set_ylabel("Number of Proteins (log\u2082 scale)", fontsize=12)
         fig.suptitle("Pockets per Protein: Method Comparison", fontsize=14)
         fig.tight_layout(rect=(0, 0, 1, 0.94))
-        fig.savefig(out_dir / "comparison_pockets_per_protein.png", dpi=150)
+        _savefig(fig, out_dir / "comparison_pockets_per_protein.png")
         plt.close(fig)
 
         # Combined: pocket size violin plot (log2 scale when high variance)
@@ -572,7 +588,7 @@ def plot_pocket_distributions(results, out_dir, novel_stats=None):
                     "Pocket Size (residues)", use_log2=log2)
         ax.set_title("Pocket Size Comparison", fontsize=14)
         plt.tight_layout()
-        fig.savefig(out_dir / "comparison_pocket_sizes.png", dpi=150)
+        _savefig(fig, out_dir / "comparison_pocket_sizes.png")
         plt.close(fig)
 
 # ============================================================
@@ -698,7 +714,7 @@ def plot_novel_pockets(results, out_dir):
     ax.set_ylabel("Number of Novel Pockets", fontsize=12)
     ax.set_title("Novel Pockets by Method", fontsize=14)
     plt.tight_layout()
-    fig.savefig(out_dir / "novel_pockets_count.png", dpi=150)
+    _savefig(fig, out_dir / "novel_pockets_count.png")
     plt.close(fig)
 
     # Novel pocket size distributions
@@ -714,7 +730,7 @@ def plot_novel_pockets(results, out_dir):
                     "Pocket Size (residues)", use_log2=log2)
         ax.set_title("Novel Pocket Size Distribution", fontsize=14)
         plt.tight_layout()
-        fig.savefig(out_dir / "novel_pocket_sizes.png", dpi=150)
+        _savefig(fig, out_dir / "novel_pocket_sizes.png")
         plt.close(fig)
 
 # ============================================================
@@ -846,7 +862,7 @@ def plot_aa_composition(aa_counts_by_method, out_path):
     ax.set_title("Amino Acid Composition of Binding Residues", fontsize=14)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -911,7 +927,7 @@ def plot_skip_breakdown(skip_counts, out_path):
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.3),
               ncol=2, fontsize=9, frameon=False)
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -981,7 +997,7 @@ def plot_threshold_sweep(sweep, out_path):
 
     fig.suptitle("Probability Threshold Sweep (residue-level)", fontsize=14)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1060,7 +1076,7 @@ def plot_length_distribution(per_protein, out_path):
         ax.set_yscale('log', base=2)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1094,7 +1110,7 @@ def plot_pockets_vs_length(per_protein, out_path):
         ax.set_yscale('log', base=2)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1128,7 +1144,7 @@ def plot_pocket_size_vs_length(per_protein, out_path):
         ax.set_yscale('log', base=2)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1157,7 +1173,7 @@ def plot_binding_fraction(per_protein, out_path):
         ax.set_yscale('log', base=2)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1192,7 +1208,7 @@ def plot_novel_ratio(method_stats, novel_stats, out_path):
         ax.set_yscale('log', base=2)
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1362,7 +1378,7 @@ def plot_class_composition(stats: pd.DataFrame, out_path: Path):
     for i, n in enumerate(stats["n_proteins"]):
         ax.text(n, i, f"  {n} ({100*n/total:.1f}%)", va='center', fontsize=8)
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1380,7 +1396,7 @@ def plot_class_unique_rate(stats: pd.DataFrame, out_path: Path):
     ax.set_title("Unique-pocket rate by classification")
     ax.legend()
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1397,7 +1413,7 @@ def plot_class_total_s2p(stats: pd.DataFrame, out_path: Path,
     for i, n in enumerate(sorted_df["total_s2p_unique"]):
         ax.text(i, n, f"{int(n)}", ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1413,12 +1429,13 @@ def plot_class_s2p_size_distribution(sizes_per_class: dict, stats: pd.DataFrame,
     for body in parts['bodies']:
         body.set_facecolor(S2P_COLOR)
         body.set_alpha(0.6)
+        body.set_rasterized(True)
     ax.set_xticks(np.arange(1, len(classes) + 1))
     ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=9)
     ax.set_ylabel("S2P-unique pocket size (residues)")
     ax.set_title("S2P-unique pocket size distribution by classification")
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1436,12 +1453,15 @@ def plot_class_s2p_per_protein(n_unique_per_class: dict, stats: pd.DataFrame, ou
     for patch in bp['boxes']:
         patch.set_facecolor(S2P_COLOR)
         patch.set_alpha(0.6)
+        patch.set_rasterized(True)
+    for flier in bp['fliers']:
+        flier.set_rasterized(True)
     ax.set_xticks(np.arange(1, len(classes) + 1))
     ax.set_xticklabels(classes, rotation=45, ha='right', fontsize=9)
     ax.set_ylabel("S2P-unique pockets per protein\n(among proteins with ≥1)", fontsize=10)
     ax.set_title("S2P-unique pockets per protein by classification")
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1458,7 +1478,7 @@ def plot_class_s2p_per_residue(stats: pd.DataFrame, out_path: Path):
     ax.set_ylabel("S2P-unique pockets per 1000 residues")
     ax.set_title("S2P-unique pocket density by classification (size-normalized)")
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1486,7 +1506,7 @@ def plot_class_novel_pocket_ratio(stats: pd.DataFrame, out_path: Path,
         ax.text(i - width / 2, s2p_r, f"{s2p_r:.2f}", ha='center', va='bottom', fontsize=8)
         ax.text(i + width / 2, p2r_r, f"{p2r_r:.2f}", ha='center', va='bottom', fontsize=8)
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1504,7 +1524,7 @@ def plot_class_s2p_p2r_ratio(stats: pd.DataFrame, out_path: Path):
     ax.set_ylabel("Total S2P-unique  /  Total P2Rank pockets")
     ax.set_title("How many novel pockets S2P contributes per P2Rank pocket, by class")
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
@@ -1520,7 +1540,7 @@ def plot_class_delta(stats: pd.DataFrame, out_path: Path):
     ax.set_ylabel("S2P-unique rate  −  P2R-unique rate")
     ax.set_title("Where S2P helps most (positive) vs where P2R does (negative)")
     plt.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    _savefig(fig, out_path)
     plt.close(fig)
 
 
