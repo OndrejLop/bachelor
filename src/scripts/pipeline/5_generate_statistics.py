@@ -83,6 +83,9 @@ parser.add_argument("--min-pocket-size", type=int, default=None,
 parser.add_argument("--max-pocket-size", type=int, default=None,
                     help="Drop pockets with more than this many residues from all stats and plots. "
                          "Default: from {results_dir}/run_metadata.json or 70.")
+parser.add_argument("--only-classification", action="store_true",
+                    help="Skip all sections except the per-class analysis (section 6). "
+                         "Needs pdb_classification.csv (tool 14) and pipeline_membership.csv (tool 15).")
 args = parser.parse_args()
 
 P2RANK_DIR   = ROOT / 'data' / 'input' / 'P2Rank'
@@ -1674,8 +1677,8 @@ def run_classification_analysis(out, plots_dir, results_dir,
     input (classification CSV, membership CSV, novel/unique CSVs) is missing."""
     classification_csv = ROOT / 'data' / 'intermediate' / 'pdb_classification.csv'
     membership_csv     = ROOT / 'data' / 'intermediate' / 'pipeline_membership.csv'
-    stats_csv          = ROOT / 'data' / 'intermediate' / 'classification_stats.csv'
-    ec_stats_csv       = ROOT / 'data' / 'intermediate' / 'classification_stats_ec.csv'
+    stats_csv          = plots_dir.parent / 'classification_stats.csv'
+    ec_stats_csv       = plots_dir.parent / 'classification_stats_ec.csv'
 
     out.write("=" * 60 + "\n")
     out.write("6. PER-CLASS ANALYSIS\n")
@@ -1756,6 +1759,21 @@ def run_classification_analysis(out, plots_dir, results_dir,
     }
 
 
+def _count_pockets_by_pdb(directory, pattern, strip_suffix):
+    """Lightweight: return {pdb_id: n_pockets} by counting CSV rows (no column parse)."""
+    by_pdb = files_by_pdb(directory, pattern, strip_suffix=strip_suffix)
+    counts = {}
+    for pdb_id, p in by_pdb.items():
+        try:
+            with open(p, 'rb') as f:
+                n = sum(1 for _ in f) - 1  # subtract header
+            if n > 0:
+                counts[pdb_id] = n
+        except Exception:
+            continue
+    return counts
+
+
 # ============================================================
 # Main
 # ============================================================
@@ -1764,6 +1782,21 @@ if __name__ == "__main__":
     import sys
 
     summary_path = STATS_DIR / "summary.txt"
+
+    if args.only_classification:
+        print("--only-classification: running section 6 only")
+        PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+        lengths    = load_protein_lengths(S2P_DIR)
+        s2p_totals = _count_pockets_by_pdb(S2P_DIR, "*_predictions.csv", "_predictions")
+        p2r_totals = _count_pockets_by_pdb(P2RANK_DIR, "*_predictions.csv", "_predictions")
+        with open(summary_path, 'a') as out:
+            run_classification_analysis(out, PLOTS_DIR, SELECTED_RESULTS_DIR,
+                                        lengths=lengths,
+                                        p2r_totals=p2r_totals,
+                                        s2p_totals=s2p_totals)
+        print(f"Done. Outputs in: {STATS_DIR}")
+        sys.exit(0)
+
     with open(summary_path, 'w') as out:
         out.write("Pipeline Statistics Report\n")
         out.write(f"Generated from: {ROOT}\n\n")
