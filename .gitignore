@@ -1,7 +1,7 @@
 
 /src/sbatch
 /src/scripts/cluster_pockets.log
-/src/scripts/tools
+#/src/scripts/tools
 .DS_Store
 CLAUDE.md
 
