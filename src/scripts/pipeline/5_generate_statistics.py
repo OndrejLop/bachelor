@@ -435,7 +435,7 @@ def plot_funnel(funnel, out_path):
     # Per stage: list of (label, count, color)
     stage_bars = [
         [("PDB", funnel["n_pdb"], 'dimgray'),
-         ("P2Rank", funnel["n_p2r_pockets"], P2R_COLOR)],
+         ("P2R", funnel["n_p2r_pockets"], P2R_COLOR)],
         [("S2P", funnel["n_s2p_pockets"], S2P_COLOR)],
         [("Comparable", funnel["n_comparable"], 'dimgray')],
         [("S2P-unique", funnel["n_s2p_unique"], S2P_COLOR),
@@ -1524,8 +1524,8 @@ def plot_class_s2p_p2r_ratio(stats: pd.DataFrame, out_path: Path):
     ax.axhline(1, color='black', lw=0.5, linestyle='--')
     ax.set_xticks(np.arange(len(sorted_df)))
     ax.set_xticklabels(sorted_df["classification"], rotation=45, ha='right', fontsize=9)
-    ax.set_ylabel("Total S2P-unique  /  Total P2Rank pockets")
-    ax.set_title("How many novel pockets S2P contributes per P2Rank pocket, by class")
+    ax.set_ylabel("Total S2P-unique  /  Total P2R pockets")
+    ax.set_title("How many novel pockets S2P contributes per P2R pocket, by class")
     plt.tight_layout()
     _savefig(fig, out_path)
     plt.close(fig)
@@ -1637,7 +1637,7 @@ def run_sasa_analysis(out, plots_dir, stats_dir, results_dir,
     out.write(f"  Wrote pocket_metrics.csv ({len(df)} rows)\n")
 
     sasa_label = 'SASA / residue (Å²)'
-    nbr_label = f'mean neighbors within {neighbor_radius:g} Å of CA'
+    nbr_label = f'mean neighbors within {neighbor_radius:g} Å of Cα'
     metrics = [('sasa_per_residue', sasa_label),
                ('mean_neighbors', nbr_label)]
     summary_text = mod.write_summary(df, metrics, sasa_dir / 'metrics_summary.txt')
@@ -1656,7 +1656,7 @@ def run_sasa_analysis(out, plots_dir, stats_dir, results_dir,
                  'SASA / residue per pocket category',
                  plots_dir / 'sasa_box.png')
     mod.plot_distributions(df, 'mean_neighbors', nbr_label,
-                           'Pocket protrusion (mean CA neighbor count) by category',
+                           'Pocket protrusion (mean Cα neighbor count) by category',
                            plots_dir / 'protrusion_distributions.png')
     mod.plot_violin(df, 'mean_neighbors', nbr_label,
                     'Pocket protrusion per category',

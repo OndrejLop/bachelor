@@ -78,6 +78,12 @@ CATEGORY_COLORS = {
     'unique_s2p': 'darkorange',
     'shared_s2p': '#ff9896',
 }
+CATEGORY_LABELS = {
+    'unique_p2r': 'unique P2R',
+    'shared_p2r': 'shared P2R',
+    'unique_s2p': 'unique S2P',
+    'shared_s2p': 'shared S2P',
+}
 
 
 def parse_residue_ids(s):
@@ -262,10 +268,11 @@ def write_summary(df: pd.DataFrame, metrics: list[tuple[str, str]], path: Path) 
                      f"{'q25':>10} {'q75':>10} {'std':>10}")
         for cat in CATEGORIES:
             sub = df.loc[df['category'] == cat, column].dropna()
+            lbl = CATEGORY_LABELS[cat]
             if sub.empty:
-                lines.append(f"{cat:<14} {0:>6} {'-':>10} {'-':>10} {'-':>10} {'-':>10} {'-':>10}")
+                lines.append(f"{lbl:<14} {0:>6} {'-':>10} {'-':>10} {'-':>10} {'-':>10} {'-':>10}")
                 continue
-            lines.append(f"{cat:<14} {len(sub):>6d} "
+            lines.append(f"{lbl:<14} {len(sub):>6d} "
                          f"{sub.mean():>10.3f} {sub.median():>10.3f} "
                          f"{sub.quantile(.25):>10.3f} {sub.quantile(.75):>10.3f} "
                          f"{sub.std():>10.3f}")
@@ -289,7 +296,7 @@ def plot_distributions(df: pd.DataFrame, column: str, axis_label: str,
         if len(sub) < 2:
             continue
         color = CATEGORY_COLORS[cat]
-        label = f"{cat} (n={len(sub)})"
+        label = f"{CATEGORY_LABELS[cat]} (n={len(sub)})"
         ax.hist(sub, bins=bins, density=True, histtype='stepfilled',
                 color=color, alpha=0.30, label=label)
         ax.hist(sub, bins=bins, density=True, histtype='step',
@@ -322,7 +329,7 @@ def plot_violin(df: pd.DataFrame, column: str, axis_label: str,
         parts['cmedians'].set_color('black')
         parts['cmedians'].set_linewidth(1.5)
     ax.set_xticks(range(1, len(order) + 1))
-    ax.set_xticklabels([f"{c}\n(n={len(d)})" for c, d in zip(order, data)])
+    ax.set_xticklabels([f"{CATEGORY_LABELS[c]}\n(n={len(d)})" for c, d in zip(order, data)])
     ax.set_ylabel(axis_label)
     ax.set_title(title)
     ax.grid(axis='y', alpha=0.25)
@@ -345,7 +352,7 @@ def plot_scatter(df: pd.DataFrame, x_col: str, y_col: str,
             continue
         ax.scatter(s[x_col], s[y_col], s=18, alpha=0.55,
                    color=CATEGORY_COLORS[cat], edgecolor='none',
-                   label=f"{cat} (n={len(s)})", rasterized=True)
+                   label=f"{CATEGORY_LABELS[cat]} (n={len(s)})", rasterized=True)
     ax.set_xlabel(x_label)
     ax.set_ylabel(y_label)
     ax.set_title(title)
@@ -366,7 +373,7 @@ def plot_box(df: pd.DataFrame, column: str, axis_label: str,
         return
     fig, ax = plt.subplots(figsize=(9, 5))
     data = [df.loc[df['category'] == c, column].dropna().to_numpy() for c in order]
-    bp = ax.boxplot(data, tick_labels=[f"{c}\n(n={len(d)})"
+    bp = ax.boxplot(data, tick_labels=[f"{CATEGORY_LABELS[c]}\n(n={len(d)})"
                                        for c, d in zip(order, data)],
                     showfliers=True, widths=0.55, patch_artist=True,
                     medianprops=dict(color='black', linewidth=1.5),
@@ -553,7 +560,7 @@ def main():
     print(f"\nWrote {csv_path}")
 
     sasa_label = 'SASA / residue (Å²)'
-    nbr_label = f'mean neighbors within {args.neighbor_radius:g} Å of CA'
+    nbr_label = f'mean neighbors within {args.neighbor_radius:g} Å of Cα'
     metrics = [('sasa_per_residue', sasa_label),
                ('mean_neighbors', nbr_label)]
 
@@ -572,7 +579,7 @@ def main():
              'SASA / residue per pocket category',
              args.output_dir / 'sasa_box.png')
     plot_distributions(df, 'mean_neighbors', nbr_label,
-                       'Pocket protrusion (mean CA neighbor count) by category',
+                       'Pocket protrusion (mean Cα neighbor count) by category',
                        args.output_dir / 'protrusion_distributions.png')
     plot_violin(df, 'mean_neighbors', nbr_label,
                 'Pocket protrusion per category',
